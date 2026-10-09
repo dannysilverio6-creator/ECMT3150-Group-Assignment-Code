@@ -7,11 +7,11 @@ This document provides a comprehensive specification of the end-to-end econometr
 ## 1. System Architecture Diagram
 
 ```
-                       +-------------------+
-                       |  SUBPROCESS.py    |
-                       +---------+---------+
-                                 |
-                                 v
+                      +-------------------+
+                      |  Orchistrator.py  |
+                      +---------+---------+
+                                |
+                                v
                        +-------------------+
                        | LSEGEXTRACTION.py |
                        +--------+----------+
@@ -24,10 +24,20 @@ This document provides a comprehensive specification of the end-to-end econometr
        +-----+-----+                         +-----+-----+
              |                                     |
              v                                     v
-      [HFD_ACD.R]                           [LFD_ARIMA.R]
+     [HFD_UHFGARCH.R]                     [LFD_GARCH(1,1).R]
              |                                     |
              v                                     v
-    [HFD_UHFGARCH.R]                        [LFD_GARCH.R]
+  [HFD_Realised_GARCH.R]                    [LFD_HAR-RV.R]
+             |                                     |
+             |                                     |
+             +------------------+------------------+
+                                |
+                                v
+                      +-------------------+
+                      |    Benchmark.py   |
+                      +---------+---------+
+                                |
+             +------------------+------------------+
              |                                     |
              v                                     v
     [HFD_MLHYBRID.R]                        [LFD_MLHYBRID.R]
@@ -35,28 +45,26 @@ This document provides a comprehensive specification of the end-to-end econometr
              +------------------+------------------+
                                 |
                                 v
-                       +-------------------+
-                       |    COMPILER.py    |
-                       +---------+---------+
-                                 |
-                                 v
-                       +-------------------+
-                       |   ECMT3150.xlsx   |
-                       | (Charts, CSV, Res)|
-                       +-------------------+  
+                      +-------------------+
+                      |    COMPILER.py    |
+                      +---------+---------+
                                 |
                                 v
-                       +-------------------+
-                       |    COMPILER.py    |
-                       +---------+---------+
-                      
-
+                      +-------------------+
+                      |    Diagnostic.py  |
+                      +---------+---------+
+                                |
+                                v
+                      +-------------------+
+                      |   ECMT3150.xlsx   |
+                      | (Charts, CSV, Res)|
+                      +-------------------+ 
 ---
 
 ## 2. Pipeline Execution Stages & Workflows
 
 ### Stage 1: Orchestration & Data Extraction
-1. **`SUBPROCESS.py` (Master Subprocess Coordinator)**:
+1. **`ORCHESTRATOR.py` (Master Subprocess Coordinator)**:
    * Initializes environment paths, manages R and Python runtime environments, checks dependencies, and executes sub-pipeline stages sequentially.
 2. **`LSEGEXTRACTION.py` (API Extractor)**:
    * Interfaces with LSEG (Refinitiv) Eikon/DataScope APIs to retrieve tick-level market microstructure and daily time series datasets.
