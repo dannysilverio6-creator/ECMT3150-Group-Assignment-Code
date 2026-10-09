@@ -8,7 +8,7 @@ This document provides a comprehensive specification of the end-to-end econometr
 
 ---------------------------------
 ## 1. System Architecture Diagram
----------------------------------
+
 
 
                       +-------------------+
@@ -72,7 +72,7 @@ This document provides a comprehensive specification of the end-to-end econometr
 
 -------------------------------------------
 ## 2. Pipeline Execution Stages & Workflows
--------------------------------------------
+
 
 
 ### Stage 1: Orchestration & Data Extraction
@@ -118,7 +118,7 @@ Validate each RIC, data availability, and subscription access before extraction.
 
 ----------------------------------------
 ## 3. High-Frequency Data (HFD) Pipeline
-----------------------------------------
+
 
 
 The HFD branch models intraday market microstructure, trade arrival dynamics, and time-deformed conditional volatility.
@@ -128,8 +128,8 @@ The HFD branch models intraday market microstructure, trade arrival dynamics, an
 |                                  HIGH-FREQUENCY PIPELINE                                       |
 +------------------------------------------------------------------------------------------------+
 |                                                                                                |
-| HFD.xlsx --> validation/session handling -->  +----------------------+                         |
-|                                               | HFD_Realised_GARCH.R |                         |
+|                                               +----------------------+                         |
+| HFD.xlsx --> validation/session handling -->  | HFD_Realised_GARCH.R |                         |
 |                                               +----------+-----------+                         |
 |                                                          |                                     |
 |                                               +----------------------+                         |
@@ -144,7 +144,7 @@ The HFD branch models intraday market microstructure, trade arrival dynamics, an
 |                                                          v                                     |
 |                                               HFD_BENCHMARK.csv / .xlsx                        |
 +------------------------------------------------------------------------------------------------+
-```
+
 ```
 
 #### 1. `HFD_Realised GARCH.R` — Autoregressive Conditional Duration Model
@@ -170,18 +170,18 @@ The HFD branch models intraday market microstructure, trade arrival dynamics, an
 
 ----------------------------------------
 ## 4. Low-Frequency Data (LFD) Pipeline
-----------------------------------------
+
 
 The LFD branch models low-frequency daily trend persistence, conditional variance clustering, and daily price/volume range dynamics.
 
 
-
+```
 +------------------------------------------------------------------------------------------------+
 |                                   LOW-FREQUENCY PIPELINE                                       |
 +------------------------------------------------------------------------------------------------+
 |                                                                                                |
-| LFD.xlsx --> validation/returns --> +----------------------+                                   |
-|                                     | LFD_GARCH(1,1).R     |                                   |
+|                                     +----------------------+                                   |
+| LFD.xlsx --> validation/returns --> | LFD_GARCH(1,1).R     |                                   |
 |                                     +----------+-----------+                                   |
 |                                                |                                               |
 |                                     +----------------------+                                   |
@@ -197,7 +197,7 @@ The LFD branch models low-frequency daily trend persistence, conditional varianc
 |                                                v                                               |
 |                                     LFD_BENCHMARK.csv / .xlsx                                  |
 +------------------------------------------------------------------------------------------------+
-
+```
 #### 1. `LFD_GARCH.R` — Daily Conditional Heteroskedasticity Model
 **Purpose:** Estimate volatility clustering in daily returns and generate conditional-variance forecasts.
 
@@ -218,7 +218,7 @@ The LFD branch models low-frequency daily trend persistence, conditional varianc
 
 ------------------------------
 ## 5. HFD and LFD BENCHMARKING
-------------------------------
+
 
 ### 1. `BENCHMARK.py`
 
@@ -249,7 +249,7 @@ The LFD branch models low-frequency daily trend persistence, conditional varianc
 
 The LFD benchmark file should contain one row per model/instrument/target/horizon/evaluation split or a documented long-form equivalent. Recommended columns:
 
-`run_id, instrument, model, forecast_origin, target_date, horizon, actual, forecast, forecast_variance, split, MAE_component, absolute_error, squared_error`
+run_id, instrument, model, forecast_origin, target_date, horizon, actual, forecast, forecast_variance, split, MAE_component, absolute_error, squared_error
 
 A summary table should report `n_obs`, `MAE`, `RMSE`, and `QLIKE` where appropriate, plus the evaluation dates and target definition. CSV is a plain-text table and cannot contain embedded charts or multiple sheets. If charts and multiple tables are required, use **`LFD_BENCHMARK.xlsx`** and optionally export a CSV summary alongside it.
 
@@ -282,7 +282,7 @@ Again, use `.csv` for a single flat table or `.xlsx` for multiple sheets and cha
 
 -----------------------------------------------------
 ## 6. Output Aggregation & Final Deliverable
------------------------------------------------------
+
 
 ### `Collector.py` — Output Aggregator
 
@@ -356,12 +356,13 @@ Use explicit status values such as `PASS`, `WARNING`, `FAIL`, and `SKIPPED`. A m
 
 ----------------------------------------
 ## 7. System File & Output Directory Map
-----------------------------------------
+
 
 
 ### Recommended project structure
 
-```text
+```
+text
 ECMT3150_PIPELINE/
 ├── config/
 │   └── config.yaml
@@ -399,6 +400,7 @@ ECMT3150_PIPELINE/
 ├── renv.lock
 └── README.md
 
+```
 ### File and object responsibilities
 
 | Filename / Object | Language / Type | System role and functionality |
@@ -407,29 +409,20 @@ ECMT3150_PIPELINE/
 | `LSEGEXTRACTION.py` | Python script | LSEG connection, extraction, normalization, metadata, extraction validation |
 | `HFD.xlsx` | Data file | Intraday input; minute bars or explicitly configured trade/quote data |
 | `LFD.xlsx` | Data file | Daily OHLCV/adjusted prices and derived daily returns |
-
 | `HFD_Realised_GARCH.R` | R script | Fits a realized-volatility/return model and exports forecasts/diagnostics |
 | `HFD_HAR-RV.R` | R script | Fits HAR-RV realized-volatility forecasts |
-
-
 | `LFD_GARCH(1,1).R` | R script | Fits daily GARCH(1,1) conditional variance |
 | `LFD_SV.R` | R script | Fits a daily stochastic-volatility model |
-
-
 | `BENCHMARK.py` | Python script | Aligns forecasts and computes comparable out-of-sample metrics |
 | `HFD_BENCHMARK.csv` | CSV file | Flat HFD benchmark results; use `.xlsx` separately if multiple sheets/charts are needed |
 | `LFD_BENCHMARK.csv` | CSV file | Flat LFD benchmark results; use `.xlsx` separately if multiple sheets/charts are needed |
-
 | `HFD_MLHYBRID.R` | R script | Fits and evaluates the HFD ML model using leakage-safe features |
 | `LFD_MLHYBRID.R` | R script | Fits and evaluates the LFD ML model using leakage-safe features |
-
-
 | `Collector.py` | Python script | Assembles forecasts, diagnostics, metrics, and charts into the final workbook |
 | `Diagnostic.py` | Python script | Data, model, forecast, and workbook quality checks |
 | `Run_Report.py` | Python script | Creates the automated run report from verified pipeline artifacts |
 | `ECMT3150_CommodityFindings.xlsx` | Excel workbook | Final summary workbook with results, charts, diagnostics, and warnings |
 | `Report.md` | Markdown report | Portable text report of the run and model comparison |
-
 | `run_manifest.json` | JSON metadata | Run configuration, timestamps, file inventory, statuses, and version information |
 | `logs/` | Log directory | Extraction, subprocess, modeling, and reporting logs |
 | `requirements.txt` | Python dependency file | Python package versions or constraints |
@@ -438,13 +431,14 @@ ECMT3150_PIPELINE/
 
 --------------------------------------------------------
 ## 8. Configuration, Reproducibility & Operational Rules
---------------------------------------------------------
+
 
 ### Central configuration
 
 Keep settings in one file and pass them to scripts rather than editing code repeatedly. Suggested keys include:
 
-```yaml
+```
+yaml
 project_name: ECMT3150
 timezone: Australia/Sydney
 
