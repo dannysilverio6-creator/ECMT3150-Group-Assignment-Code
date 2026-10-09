@@ -87,7 +87,7 @@ This document provides a comprehensive specification of the end-to-end econometr
 2.**ORGANISE DATE's**
 
 ### Stage 1: High-Frequency Dates (HFD)
-  - Historical Estimation Period: 01-01-2025 to 20-02-2026.
+  - Historical Estimation Period: 01-01-2026 to 20-02-2026.
   - Event Study Period: 23-02-2026 to 13-03-2026.
   - Data Frequency: Minute-by-minute intraday observations, subject to LSEG data availability and extraction limits.
   - Purpose: Captures immediate commodity market reactions, intraday volatility changes, and price adjustments surrounding the initial military strikes on Iran.
@@ -454,7 +454,7 @@ hfd:
   interval: "1min"
   raw_ticks: false
   market_session_only: true
-  estimation_start: "2025-01-01"
+  estimation_start: "2026-01-01"
   estimation_end: "2026-02-20"
   event_window_start: "2026-02-23"
   event_window_end: "2026-03-13"
