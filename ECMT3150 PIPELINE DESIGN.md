@@ -37,9 +37,9 @@ This document provides a comprehensive specification of the end-to-end econometr
              +------------------+------------------+
                                 |
                                 v
-                      +-------------------+    +-----------------------+     +-----------------------+
-                      |    Benchmark.py   |--->|    LFD_BENCHMARK.CSV  |  /  |    HFD_BENCHMARK.CSV  |  
-                      +---------+---------+    +-----------+-----------+     +-----------+-----------+
+                      +-------------------+    +------------------------+     +------------------------+
+                      |    Benchmark.py   |--->|    LFD_BENCHMARK.xslx  |  /  |    HFD_BENCHMARK.xslx  |  
+                      +---------+---------+    +-----------+------------+     +------------+-----------+
                                 |
              +------------------+------------------+
              |                                     |
@@ -142,7 +142,7 @@ The HFD branch models intraday market microstructure, trade arrival dynamics, an
 |                                               |   HFD_MLHYBRID.R     |                         |
 |                                               +----------+-----------+                         |
 |                                                          v                                     |
-|                                               HFD_BENCHMARK.csv / .xlsx                        |
+|                                               HFD_BENCHMARK.xlsx                               |
 +------------------------------------------------------------------------------------------------+
 
 ```
@@ -195,7 +195,7 @@ The LFD branch models low-frequency daily trend persistence, conditional varianc
 |                                     +----------+-----------+                                   |
 |                                                |                                               |
 |                                                v                                               |
-|                                     LFD_BENCHMARK.csv / .xlsx                                  |
+|                                     LFD_BENCHMARK.xlsx                                         |
 +------------------------------------------------------------------------------------------------+
 ```
 #### 1. `LFD_GARCH.R` — Daily Conditional Heteroskedasticity Model
