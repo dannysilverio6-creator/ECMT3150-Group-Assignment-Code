@@ -98,7 +98,7 @@ This document provides a comprehensive specification of the end-to-end econometr
   - Data Frequency: Daily OHLCV (Open, High, Low, Close, Volume), adjusted prices where available, and derived log returns.
   - Purpose: Estimates historical commodity market behaviour and examines the persistence of price and volatility changes following the outbreak of the conflict.
 
-3.**ORGANISE Commodities**
+### Stage 3: ORGANISE Commodities
   - Gold: XAU= (spot) or GCc1 (COMEX futures).
   - Silver: XAG= (spot) or SIc1 (COMEX futures).
   - Uranium: Identify the appropriate CME uranium futures RIC or UxC spot-price benchmark in LSEG Workspace. (MAY NEED TO PIVOT!)
@@ -106,7 +106,7 @@ This document provides a comprehensive specification of the end-to-end econometr
 Validate each RIC, data availability, and subscription access before extraction. Record instrument type, currency, units, timestamps, and frequency, keeping spot, futures, and equity proxies separate. Uranium may not have minute-level spot data available, so document any proxy used.
 
 
-4. **`LSEGEXTRACTION.py` — API Extractor**
+### Stage 4: `LSEGEXTRACTION.py` — API Extractor
    - Connects through the supported LSEG Workspace/LSEG Data Library interface configured for the user's entitlement. Do not assume Eikon, DataScope, and Workspace endpoints are interchangeable.
    - Extracts only fields and instruments available under the account's subscription.
    - Produces two standardized datasets:
