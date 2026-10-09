@@ -388,7 +388,7 @@ ECMT3150_PIPELINE/
 │       ├── benchmarks/
 │       ├── diagnostics/
 │       ├── charts/
-│       ├── ECMT3150.xlsx
+│       ├── ECMT3150_CommodityFindings.xlsx
 │       ├── Run_Report.md
 │       └── run_manifest.json
 ├── logs/
@@ -436,4 +436,52 @@ ECMT3150_PIPELINE/
 | `renv.lock` | R dependency lockfile | Reproducible R package environment |
 
 
+--------------------------------------------------------
+## 8. Configuration, Reproducibility & Operational Rules
+--------------------------------------------------------
 
+### Central configuration
+
+Keep settings in one file and pass them to scripts rather than editing code repeatedly. Suggested keys include:
+
+```yaml
+project_name: ECMT3150
+timezone: Australia/Sydney
+
+event:
+  name: "Iran war / initial US-Israeli strikes"
+  event_date: "2026-02-28"
+  first_likely_trading_response: "2026-03-02"
+
+symbols: []  # Populate with validated LSEG RICs
+
+hfd:
+  enabled: true
+  interval: "1min"
+  raw_ticks: false
+  market_session_only: true
+  estimation_start: "2025-01-01"
+  estimation_end: "2026-02-20"
+  event_window_start: "2026-02-23"
+  event_window_end: "2026-03-13"
+
+lfd:
+  enabled: true
+  frequency: "daily"
+  estimation_start: "2023-01-01"
+  estimation_end: "2026-02-27"
+  post_event_start: "2026-03-02"
+  post_event_end: "2026-10-09"
+
+forecast:
+  target: "realised_variance"
+  horizon: 1
+  rolling_origin: true
+  # Define validation/test boundaries within the estimation/post-event
+  # sample in the modelling configuration; do not tune on the final test set.
+
+report:
+  generate_markdown: true
+  generate_pdf: false
+  use_ai: false
+```
