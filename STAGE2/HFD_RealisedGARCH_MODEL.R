@@ -9,12 +9,7 @@
 
 # 1. Load Required Libraries
 required_packages <- c("readxl", "dplyr", "lubridate", "rugarch", "forecast", "ggplot2", "patchwork", "tidyr")
-for (pkg in required_packages) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-    library(pkg, character.only = TRUE)
-  }
-}
+lapply(required_packages, library, character.only = TRUE, quietly = TRUE)
 
 # 2. Setup Output Directories
 output_dir_png <- "Pipeline_Outputs/PNG_Plots/HFD_Realized_GARCH"
