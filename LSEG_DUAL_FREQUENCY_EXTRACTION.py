@@ -1,133 +1,21 @@
 # ==============================================================================
-#  LSEG WORKSPACE DATA EXTRACTION TOOL                    dual-frequency version 3
-# ==============================================================================
+#  LSEG WORKSPACE DATA EXTRACTION TOOL dual-frequency version 3
 #
-#  WHAT THIS SCRIPT DOES
-#  ---------------------
-#  Downloads historical price data from LSEG Workspace for a list of companies,
-#  cleans it, and saves a structured Excel workbook together with CSV copies.
-#
-#  QUICK START
-#  -----------
-#  1. Open LSEG Workspace and log in. The script connects through it.
-#  2. Edit the USER SETTINGS section below. Most of the time you only change:
-#         INSTRUMENTS             which companies
-#         START_DATE, END_DATE    which period
-#         LFD/HFD settings        daily and 1-minute frequencies
-#  3. (Optional) Set PREVIEW_ONLY = True and run once. The script checks your
-#     settings and prints the request plan without downloading anything.
-#  4. Set PREVIEW_ONLY = False and run:   python LSEG_EXTRACTION_v2.py
-#
-#  COMMON CHANGES AT A GLANCE
-#  --------------------------
-#  I want to ...                            Change this
-#  ---------------------------------------  ------------------------------------
-#  add or remove a company                  INSTRUMENTS              (section 1)
-#  read a long list of companies from file  INSTRUMENTS_FILE         (section 1)
-#  change the sample period                 START_DATE, END_DATE     (section 2)
-#  get the last N years up to today         START_DATE = "5Y"
-#                                           END_DATE   = "today"     (section 2)
-#  switch to weekly or monthly data         INTERVAL = "weekly"      (section 3)
-#  download intraday bars (e.g. 5-minute)   INTERVAL = "5min"        (section 3)
-#  add bid/ask or other variables           FIELDS                   (section 4)
-#  get prices not adjusted for splits       ADJUSTMENTS              (section 4)
-#  use simple instead of log returns        RETURN_TYPE = "simple"   (section 5)
-#  check settings without downloading       PREVIEW_ONLY = True      (section 7)
-#
-#  Ready-made example configurations are listed at the end of the settings.
-#
-#  WHAT YOU GET
-#  ------------
-#  A folder for each run inside OUTPUT_FOLDER, containing:
-#
-#  LSEG_LFD_<date>.xlsx and LSEG_HFD_<date>.xlsx           the two main workbooks:
-#      README        settings used for this run and a guide to every sheet
-#      Companies     one row per company: status, observations, coverage
-#      Close, Open, High, Low, Volume, ...
-#                    one sheet per field in WIDE layout:
-#                    rows = dates, columns = companies (good for charts)
-#      Returns       period returns from the closing price, same layout
-#      Statistics    descriptive statistics for each company and variable
-#      Missing_Data  share of missing values for each company and field
-#      Data_Long     all data in LONG (tidy) layout: one row per
-#                    company-date (good for R, Stata, pandas, pivot tables)
-#      Request_Log   every request sent to LSEG, its status and row count
-#
-#  csv/              CSV copies of every table above
-#  csv/by_company/   the raw download for each company, with LSEG field codes
-#
-#  REQUIREMENTS
-#  ------------
-#  pip install lseg-data pandas numpy openpyxl
-#
+#  
 # ==============================================================================
 
-
 # ==============================================================================
-#                                USER SETTINGS
+# INSTRUMENT SELECTION
 # ==============================================================================
 
-
-# ------------------------------------------------------------------------------
-# 1. COMPANIES
-# ------------------------------------------------------------------------------
-#
-# Each company is identified by its RIC (Refinitiv Instrument Code): the ticker
-# followed by a suffix for the exchange on which it trades.
-#
-#     Suffix   Exchange                        Example
-#     ------   -----------------------------   --------------------------
-#     .O       NASDAQ                          AAPL.O    Apple
-#     .N       New York Stock Exchange         JPM.N     JPMorgan Chase
-#     .AX      Australian Securities Exchange  BHP.AX    BHP Group
-#     .L       London Stock Exchange           HSBA.L    HSBC
-#     .DE      Xetra (Germany)                 SAPG.DE   SAP
-#     .T       Tokyo Stock Exchange            7203.T    Toyota
-#
-#     Indices start with a dot:  .SPX (S&P 500), .AXJO (S&P/ASX 200)
-#     Exchange rates end in "=": AUD= (AUD/USD), EUR= (EUR/USD)
-#
-# HOW TO FIND A RIC
-#     Type the company name into the LSEG Workspace search bar. The RIC is
-#     shown next to the name, e.g. "Apple Inc   AAPL.O".
-#
-# FORMAT
-#     "RIC": "Label",
-#
-#     - The RIC (left) is what is sent to LSEG. It must be exact.
-#     - The label (right) only appears in the Excel output. Leave it empty
-#       ("") and the company name is fetched from LSEG automatically
-#       (when FETCH_COMPANY_NAMES = True), otherwise the RIC is used.
-#     - To drop a company, delete its line or put # at the start of the line.
-#     - Every line ends with a comma.
-#     - A plain list also works:  INSTRUMENTS = ["AAPL.O", "MSFT.O"]
-#
-# ------------------------------------------------------------------------------
 
 INSTRUMENTS = {
-    "AAPL.O": "Apple",
-    "MSFT.O": "Microsoft",
-    "GOOG.O": "Alphabet",
-    "AMZN.O": "Amazon",
-    "META.O": "Meta Platforms",
-    "NVDA.O": "NVIDIA",
-    "TSLA.O": "Tesla",
-    "JPM.N":  "JPMorgan Chase",
-    "BAC.N":  "Bank of America",
-    "WMT.N":  "Walmart",
+    "XAU=": "Gold (Spot)",
+    "XAG=": "Silver (Spot)",
+    "UXXc1": "Uranium (Active Futures)"
 }
 
-# OPTIONAL - READ THE COMPANIES FROM A FILE
-#     For long lists, put the RICs in a CSV or Excel file with a header row.
-#     The column "RIC" is required; the column "Name" is optional:
-#
-#         RIC,Name
-#         BHP.AX,BHP Group
-#         CBA.AX,Commonwealth Bank
-#
-#     Then give the file name, e.g. INSTRUMENTS_FILE = "companies.csv".
-#     A relative name is looked up in the folder that holds this script.
-#     When a file is given, INSTRUMENTS above is ignored.
+
 
 INSTRUMENTS_FILE = None
 
@@ -136,97 +24,25 @@ FETCH_COMPANY_NAMES = True
 
 
 # ------------------------------------------------------------------------------
-# 2. DATE RANGE
-# ------------------------------------------------------------------------------
-#
-# START_DATE can be written in either of two ways:
-#     (a) a fixed date, YYYY-MM-DD                        "2020-01-01"
-#     (b) a look-back period, counted back from END_DATE:
-#             "90D" = 90 days       "12W" = 12 weeks
-#             "18M" = 18 months     "5Y"  = 5 years
-#
-# END_DATE can be written in either of two ways:
-#     (a) a fixed date, YYYY-MM-DD                        "2025-12-31"
-#     (b) "today"
-#
-# EXAMPLES
-#     Calendar year 2024          START_DATE = "2024-01-01"
-#                                 END_DATE   = "2024-12-31"
-#
-#     Last five years to today    START_DATE = "5Y"
-#                                 END_DATE   = "today"
-#
-#     Five years ending 2019      START_DATE = "5Y"
-#                                 END_DATE   = "2019-12-31"
-#
-# NOTES
-#     - Fixed dates make the download reproducible. "today" changes every
-#       time the script runs, so record the dates you actually used
-#       (they are written to the README sheet of every workbook).
-#     - For intraday data the whole END_DATE day is included.
-#     - LSEG keeps intraday history for a limited period only (typically
-#       about a year for minute bars). Older intraday requests return nothing.
-#     - "M" here means MONTHS of look-back. It is unrelated to INTERVAL = "1M".
-#
+# 2. DATE RANGE & FREQUENCY
 # ------------------------------------------------------------------------------
 
-START_DATE = "2025-09-30"
-
-END_DATE = "2026-09-30"
-
-
-# ------------------------------------------------------------------------------
-# 3. FREQUENCY
-# ------------------------------------------------------------------------------
-#
-# This version automatically downloads TWO datasets in one run:
-#
-#   LFD = Low Frequency Data
-#         Default: daily observations ("daily")
-#
-#   HFD = High Frequency Data
-#         Default: one-minute bars ("1min")
-#
-# You can change the two frequencies independently:
-#
-#     LFD_INTERVAL = "daily"
-#     HFD_INTERVAL = "1min"
-#
-# Other supported HFD examples include "5min", "10min", "30min" and "hourly".
-#
-# IMPORTANT:
-# Minute-by-minute history is normally subject to a much shorter LSEG
-# historical availability window than daily data. To keep the output
-# manageable, HFD_START_DATE defaults to "30D" rather than using the full
-# LFD sample period. You can change this to "7D", "14D", "60D", etc.
-#
-# If LSEG does not provide the requested minute history, the HFD workbook
-# will show the failed/empty requests in Request_Log rather than silently
-# substituting daily data.
-#
-# Both workbooks retain the same sheets, formatting, field layout, returns,
-# statistics, missing-data reporting and long-format structure as the
-# original single-frequency script.
-#
-# ------------------------------------------------------------------------------
 LFD_INTERVAL = "daily"
 HFD_INTERVAL = "1min"
 
-# LFD uses the full START_DATE -> END_DATE period.
-LFD_START_DATE = START_DATE
-LFD_END_DATE = END_DATE
+# Stage 1: Low Frequency (LFD) Dates
+LFD_HISTORICAL_START_DATE = "2023-01-01"
+LFD_HISTORICAL_END_DATE = "2026-02-27"
 
-# HFD is deliberately shorter because 1-minute data produces many rows.
-# Default: the most recent 30 calendar days ending at HFD_END_DATE.
-# Examples:
-#     "7D"  = last 7 calendar days
-#     "14D" = last 14 calendar days
-#     "30D" = last 30 calendar days
-#     "60D" = last 60 calendar days
-# Using "30D" keeps the high-frequency workbook much smaller while still
-# providing enough observations for most intraday analysis.
-HFD_START_DATE = "30D"
-HFD_END_DATE = END_DATE
+LFD_EVENT_START_DATE = "2026-03-02"
+LFD_EVENT_END_DATE = "2026-10-09"
+
+# Stage 2: High Frequency (HFD) Dates
+HFD_HISTORICAL_START_DATE = "2026-01-01"
+HFD_HISTORICAL_END_DATE = "2026-02-20"
+
+HFD_EVENT_START_DATE = "2026-02-23"
+HFD_EVENT_END_DATE = "2026-03-13"
 
 # Date used in the final workbook filenames. None = date the script runs.
 OUTPUT_DATE = None
@@ -248,16 +64,6 @@ OUTPUT_DATE = None
 #     VWAP          VWAP         volume-weighted average price
 #     NUM_MOVES     Trades       number of trades
 #     TRNOVR_UNS    Turnover     value traded, in the trading currency
-#
-# NOTES
-#     - Not every field exists for every instrument. Indices usually have no
-#       volume; exchange rates have BID/ASK/MID_PRICE but no TRDPRC_1.
-#       Unavailable fields simply appear as blank (see the Missing_Data sheet).
-#     - FIELDS = [] requests LSEG's default field set for each instrument,
-#       which is a quick way to discover what is available.
-#     - Fields not in the table above still work; their sheet is named after
-#       the field code. You can add a friendly name in FIELD_DICTIONARY
-#       further down this file.
 #
 # ------------------------------------------------------------------------------
 
@@ -291,12 +97,6 @@ ADJUSTMENTS = None
 #
 # RETURN_PRICE_FIELD is the price used (normally TRDPRC_1, the close).
 # For exchange rates, which have no traded price, use "MID_PRICE".
-#
-# Returns are computed separately for each company from its own consecutive
-# observations, so differing trading calendars (e.g. ASX and NYSE holidays)
-# do not create artificial gaps. The first observation of each company has
-# no return. A missing price makes both adjacent returns missing.
-#
 # ------------------------------------------------------------------------------
 
 COMPUTE_RETURNS = True
@@ -349,7 +149,7 @@ MAX_RETRIES = 2
 #
 # ------------------------------------------------------------------------------
 
-OUTPUT_FOLDER = "LSEG_Output"
+OUTPUT_FOLDER = "ECMT3150_LSEG_Output"
 
 TIMESTAMPED_RUN_FOLDER = True
 
@@ -358,59 +158,10 @@ SAVE_CSV = True
 PREVIEW_ONLY = False
 
 
-# ------------------------------------------------------------------------------
-# EXAMPLE CONFIGURATIONS  (copy the lines you need over the settings above)
-# ------------------------------------------------------------------------------
-#
-# (A) ASX big-four banks, monthly, last ten years
-#
-#     INSTRUMENTS = {
-#         "CBA.AX": "Commonwealth Bank",
-#         "WBC.AX": "Westpac",
-#         "NAB.AX": "National Australia Bank",
-#         "ANZ.AX": "ANZ Group",
-#     }
-#     START_DATE = "10Y"
-#     END_DATE   = "today"
-#     INTERVAL   = "monthly"
-#
-# (B) Equity indices, daily, fixed sample for an assignment
-#
-#     INSTRUMENTS = {
-#         ".SPX":  "S&P 500",
-#         ".AXJO": "S&P/ASX 200",
-#         ".FTSE": "FTSE 100",
-#     }
-#     START_DATE = "2015-01-01"
-#     END_DATE   = "2024-12-31"
-#     INTERVAL   = "daily"
-#     FIELDS     = ["TRDPRC_1", "OPEN_PRC", "HIGH_1", "LOW_1"]
-#
-# (C) Five-minute bars for two stocks over the last month
-#
-#     INSTRUMENTS = {"AAPL.O": "Apple", "MSFT.O": "Microsoft"}
-#     START_DATE  = "1M"
-#     END_DATE    = "today"
-#     INTERVAL    = "5min"
-#
-# (D) Exchange rates, weekly, last three years
-#
-#     INSTRUMENTS = {"AUD=": "AUD/USD", "EUR=": "EUR/USD", "JPY=": "USD/JPY"}
-#     START_DATE  = "3Y"
-#     END_DATE    = "today"
-#     INTERVAL    = "weekly"
-#     FIELDS      = ["BID", "ASK", "MID_PRICE"]
-#     RETURN_PRICE_FIELD = "MID_PRICE"
-#
-# ==============================================================================
-#                              END OF USER SETTINGS
-# ==============================================================================
-
 
 
 # ==============================================================================
-#  EVERYTHING BELOW THIS LINE RUNS THE EXTRACTION.
-#  You do not need to edit it to change companies, dates or frequency.
+# LSEG EXTRACTION.
 # ==============================================================================
 
 import math
@@ -1810,94 +1561,60 @@ def run_frequency(cfg, frequency_tag, folders):
 
 def main():
     banner(f"LSEG WORKSPACE DATA EXTRACTION TOOL  (version {SCRIPT_VERSION})")
-    print("This run produces TWO workbooks: Low Frequency (daily) and "
-          "High Frequency (1-minute).")
+    print("This run produces FOUR workbooks: LFD Historical, LFD Event, HFD Historical, and HFD Event.")
 
-    # ---- 1. Shared settings -------------------------------------------------
-    # Resolve the instruments once so the same company list is used for both
-    # workbooks. The original settings/validation functions are then reused.
-    shared_cfg = resolve_settings(
-        interval_value=LFD_INTERVAL,
-        start_value=LFD_START_DATE,
-        end_value=LFD_END_DATE,
-        batch_days_value=LFD_TIME_BATCH_DAYS,
-    )
-    hfd_cfg = resolve_settings(
-        interval_value=HFD_INTERVAL,
-        start_value=HFD_START_DATE,
-        end_value=HFD_END_DATE,
-        batch_days_value=HFD_TIME_BATCH_DAYS,
-    )
+    # ---- 1. Configure the 4 batches -----------------------------------------
+    configs = [
+        ("LFD_HISTORICAL", resolve_settings(
+            interval_value=LFD_INTERVAL, start_value=LFD_HISTORICAL_START_DATE, 
+            end_value=LFD_HISTORICAL_END_DATE, batch_days_value=LFD_TIME_BATCH_DAYS)),
+        ("LFD_EVENT", resolve_settings(
+            interval_value=LFD_INTERVAL, start_value=LFD_EVENT_START_DATE, 
+            end_value=LFD_EVENT_END_DATE, batch_days_value=LFD_TIME_BATCH_DAYS)),
+        ("HFD_HISTORICAL", resolve_settings(
+            interval_value=HFD_INTERVAL, start_value=HFD_HISTORICAL_START_DATE, 
+            end_value=HFD_HISTORICAL_END_DATE, batch_days_value=HFD_TIME_BATCH_DAYS)),
+        ("HFD_EVENT", resolve_settings(
+            interval_value=HFD_INTERVAL, start_value=HFD_EVENT_START_DATE, 
+            end_value=HFD_EVENT_END_DATE, batch_days_value=HFD_TIME_BATCH_DAYS)),
+    ]
 
     print("\n" + "=" * 80)
-    print("DUAL-FREQUENCY REQUEST PLAN")
+    print("QUAD-FREQUENCY REQUEST PLAN")
     print("=" * 80)
-    print(f"LFD: {shared_cfg.interval['label']} | "
-          f"{fmt_date(shared_cfg.start_date)} to {fmt_date(shared_cfg.end_date)}")
-    print(f"HFD: {hfd_cfg.interval['label']} | "
-          f"{fmt_date(hfd_cfg.start_date)} to {fmt_date(hfd_cfg.end_date)}")
-    print(f"Companies: {len(shared_cfg.rics)}")
-    print(f"Output names: LSEG_LFD_{OUTPUT_DATE or pd.Timestamp.now():%Y-%m-%d}.xlsx "
-          f"and LSEG_HFD_{OUTPUT_DATE or pd.Timestamp.now():%Y-%m-%d}.xlsx")
-
+    for tag, cfg in configs:
+        print(f"{tag}: {cfg.interval['label']} | {fmt_date(cfg.start_date)} to {fmt_date(cfg.end_date)}")
+    
     if PREVIEW_ONLY:
         banner("PREVIEW ONLY")
         print("The settings are valid. Nothing was downloaded.")
-        print("Set PREVIEW_ONLY = False to run both extractions.")
         return
 
     if ld is None:
-        raise SettingsError("The lseg-data library is not installed.\n"
-                            "Install it with:  pip install lseg-data")
+        raise SettingsError("The lseg-data library is not installed.\nInstall it with:  pip install lseg-data")
 
-    # One shared output folder keeps the two workbooks together while each
-    # workbook retains the original visual/layout structure.
-    base = (OUTPUT_FOLDER if os.path.isabs(OUTPUT_FOLDER)
-            else os.path.join(shared_cfg.script_folder, OUTPUT_FOLDER))
-    if TIMESTAMPED_RUN_FOLDER:
-        run_folder = os.path.join(
-            base, f"{pd.Timestamp.now():%Y-%m-%d_%H%M%S}_dual_frequency"
-        )
-    else:
-        run_folder = base
+    base = (OUTPUT_FOLDER if os.path.isabs(OUTPUT_FOLDER) else os.path.join(configs[0][1].script_folder, OUTPUT_FOLDER))
+    run_folder = os.path.join(base, f"{pd.Timestamp.now():%Y-%m-%d_%H%M%S}_quad_extraction") if TIMESTAMPED_RUN_FOLDER else base
     os.makedirs(run_folder, exist_ok=True)
 
-    # ---- 2. Connect once ----------------------------------------------------
+    # ---- 2. Connect and Extract ---------------------------------------------
     connect()
     try:
-        # Fetch names once and copy them into both configurations.
-        fetch_company_names(shared_cfg)
-        hfd_cfg.names = shared_cfg.names.copy()
-        hfd_cfg.instruments = shared_cfg.instruments.copy()
+        # Fetch names once using the first config, then share across all
+        fetch_company_names(configs[0][1])
+        shared_names = configs[0][1].names
+        shared_instruments = configs[0][1].instruments
 
-        # ---- 3. LFD ----------------------------------------------------------
-        lfd_folders = prepare_output_folders(shared_cfg, run_folder=run_folder)
-        run_frequency(shared_cfg, "LFD", lfd_folders)
-
-        # ---- 4. HFD ----------------------------------------------------------
-        hfd_folders = prepare_output_folders(hfd_cfg, run_folder=run_folder)
-        run_frequency(hfd_cfg, "HFD", hfd_folders)
+        for tag, cfg in configs:
+            cfg.names = shared_names.copy()
+            cfg.instruments = shared_instruments.copy()
+            folders = prepare_output_folders(cfg, run_folder=run_folder)
+            
+            # Override standard frequency tag so folder/file names get the specific quad-batch name
+            run_frequency(cfg, tag, folders)
 
     finally:
         disconnect()
 
     banner("COMPLETE")
     print(f"Results folder: {run_folder}")
-    print("Created:")
-    output_date = OUTPUT_DATE or pd.Timestamp.now().strftime("%Y-%m-%d")
-    print(f"  LSEG_LFD_{output_date}.xlsx")
-    print(f"  LSEG_HFD_{output_date}.xlsx")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except SettingsError as error:
-        banner("SETTINGS ERROR")
-        print(error)
-        print("\nCorrect the USER SETTINGS at the top of this script and run it again.")
-        sys.exit(1)
-    except ExtractionError as error:
-        banner("EXTRACTION STOPPED")
-        print(error)
-        sys.exit(1)
