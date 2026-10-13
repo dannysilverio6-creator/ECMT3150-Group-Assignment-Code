@@ -1706,24 +1706,28 @@ def merge_dataset_workbooks(frequency_tag, sources, output_path, status_rows):
                 target_sheet = combined.create_sheet(new_title)
 
                 # Copy cell values and formatting, including hyperlinks/comments.
-                for row in source_sheet.iter_rows():
-                    for source_cell in row:
-                        target_cell = target_sheet.cell(
-                            row=source_cell.row,
-                            column=source_cell.column,
-                            value=source_cell.value,
-                        )
+                # 1. OPTIMIZED BULK COPY: Append data values directly
+                for row_values in source_sheet.iter_rows(values_only=True):
+                    target_sheet.append(row_values)
+
+                # 2. HEADER STYLES ONLY: Copy complex styles just for the top 2 rows
+                for row_idx, row in enumerate(source_sheet.iter_rows(min_row=1, max_row=2), start=1):
+                    for col_idx, source_cell in enumerate(row, start=1):
+                        target_cell = target_sheet.cell(row=row_idx, column=col_idx)
                         if source_cell.has_style:
                             if source_cell.font: target_cell.font = copy(source_cell.font)
                             if source_cell.border: target_cell.border = copy(source_cell.border)
                             if source_cell.fill: target_cell.fill = copy(source_cell.fill)
-                            if source_cell.number_format: target_cell.number_format = copy(source_cell.number_format)
                             if source_cell.alignment: target_cell.alignment = copy(source_cell.alignment)
-                            if source_cell.protection: target_cell.protection = copy(source_cell.protection)
-                        if source_cell.hyperlink:
-                            target_cell._hyperlink = copy(source_cell.hyperlink)
-                        if source_cell.comment:
-                            target_cell.comment = copy(source_cell.comment)
+                            if source_cell.number_format: target_cell.number_format = source_cell.number_format
+
+                # 3. DATA FORMATTING: Apply number formats to columns efficiently
+                if target_sheet.max_row > 2:
+                    for col_idx, source_cell in enumerate(source_sheet[2], start=1):
+                        fmt = source_cell.number_format
+                        if fmt and fmt != 'General':
+                            for row_idx in range(3, target_sheet.max_row + 1):
+                                target_sheet.cell(row=row_idx, column=col_idx).number_format = fmt
 
                 # Preserve worksheet layout as far as supported by openpyxl.
                 for key, dimension in source_sheet.column_dimensions.items():
