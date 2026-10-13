@@ -119,7 +119,7 @@ PIPELINE_STAGES = [
         "runtime": "r",
         "script": "STAGE2/HFD_RealisedGARCH_MODEL.R",
         "required": True,
-        "depends_on": ["extract"],
+        "depends_on": ["extract", "stage2_install"],
         "outputs": [],
     },
     {
@@ -129,7 +129,7 @@ PIPELINE_STAGES = [
         "runtime": "r",
         "script": "STAGE2/HFD_HAR-RV_MODEL.R",
         "required": True,
-        "depends_on": ["extract"],
+        "depends_on": ["extract", "stage2_install"],
         "outputs": [],
     },
     {
@@ -139,7 +139,7 @@ PIPELINE_STAGES = [
         "runtime": "r",
         "script": "STAGE2/LFD_GARCH_MODEL.R",
         "required": True,
-        "depends_on": ["extract"],
+        "depends_on": ["extract", "stage2_install"],
         "outputs": [],
     },
     {
@@ -149,7 +149,7 @@ PIPELINE_STAGES = [
         "runtime": "r",
         "script": "STAGE2/LFD_SV_MODEL.R",
         "required": True,
-        "depends_on": ["extract"],
+        "depends_on": ["extract", "stage2_install"],
         "outputs": [],
     },
     {
@@ -215,9 +215,6 @@ PIPELINE_STAGES = [
         "outputs": [],
     }
 ]
-
-# Optional report files are checked only if the Diagnostic script creates them.
-OPTIONAL_FINAL_OUTPUTS = ["Run_Report.pdf", "Run_Report.html"]
 
 # Optional report files are checked only if the Diagnostic script creates them.
 OPTIONAL_FINAL_OUTPUTS = ["Run_Report.pdf", "Run_Report.html"]
