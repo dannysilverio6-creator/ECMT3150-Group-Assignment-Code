@@ -13,10 +13,10 @@ import shutil
 import subprocess
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 
 def create_dir(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
+    os.makedirs(path, exist_ok=True)
 
 def main():
     print("======================================================")
@@ -24,15 +24,24 @@ def main():
     print(f" Date: {datetime.now().strftime('%Y-%m-%d')}")
     print("======================================================\n")
 
+    # Resolve Base Output Directory (Targeting ECMT3150 OUTPUTS)
+    if os.path.exists("../ECMT3150 OUTPUTS"):
+        base_output_dir = os.path.abspath("../ECMT3150 OUTPUTS/Pipeline_Outputs")
+    else:
+        base_output_dir = os.path.abspath("Pipeline_Outputs")
+
     # Target Directories
-    input_dir_rds = os.path.join("Pipeline_Outputs", "RDS_Models")
-    input_dir_png = os.path.join("Pipeline_Outputs", "PNG_Plots")
+    input_dir_rds = os.path.join(base_output_dir, "RDS_Models")
+    input_dir_png = os.path.join(base_output_dir, "PNG_Plots")
     
-    output_dir_compiled = os.path.join("Pipeline_Outputs", "Consolidated_Results")
-    output_dir_plots = os.path.join("Pipeline_Outputs", "Consolidated_Plots")
+    output_dir_compiled = os.path.join(base_output_dir, "Consolidated_Results")
+    output_dir_plots = os.path.join(base_output_dir, "Consolidated_Plots")
     
     create_dir(output_dir_compiled)
     create_dir(output_dir_plots)
+
+    print(f"Reading RDS Models from : {input_dir_rds}")
+    print(f"Reading PNG Plots from  : {input_dir_png}\n")
 
     # ---------------------------------------------------------
     # TASK 1: CONSOLIDATE PNG DASHBOARDS
@@ -49,21 +58,27 @@ def main():
                     png_count += 1
         print(f" -> Successfully copied {png_count} diagnostic plots to {output_dir_plots}\n")
     else:
-        print(" -> No PNG plots directory found.\n")
+        print(" -> No PNG plots directory found at expected path.\n")
 
     # ---------------------------------------------------------
     # TASK 2: EXTRACT BENCHMARKS FROM RDS (Via R Subprocess)
     # ---------------------------------------------------------
     print("Task 2: Parsing Model RDS Files and Extracting Benchmarks...")
     
-    temp_csv_dir = "temp_benchmark_csvs"
+    temp_csv_dir = os.path.abspath("temp_benchmark_csvs")
     create_dir(temp_csv_dir)
     
+    # Escape paths for R script string injection
+    r_rds_dir = input_dir_rds.replace("\\", "/")
+    r_out_dir = temp_csv_dir.replace("\\", "/")
+
     # Inline R script to safely bypass Python's inability to read S4 R objects
     r_extractor_script = f"""
 suppressPackageStartupMessages(library(dplyr))
-out_dir <- "{temp_csv_dir}"
-rds_dir <- "{input_dir_rds}"
+out_dir <- "{r_out_dir}"
+rds_dir <- "{r_rds_dir}"
+
+cat("Scanning RDS directory:", rds_dir, "\\n")
 
 get_latest <- function(pattern) {{
   files <- list.files(rds_dir, pattern = pattern, full.names = TRUE, ignore.case = TRUE)
@@ -74,6 +89,7 @@ get_latest <- function(pattern) {{
 # 1. LFD GARCH(1,1)
 f_lfd_garch <- get_latest("LFD_GARCH")
 if(!is.null(f_lfd_garch)) {{
+  cat("Processing:", basename(f_lfd_garch), "\\n")
   res <- readRDS(f_lfd_garch)
   df <- bind_rows(lapply(res, function(x) x$summary_df))
   write.csv(df, file.path(out_dir, "LFD_GARCH.csv"), row.names=FALSE)
@@ -82,6 +98,7 @@ if(!is.null(f_lfd_garch)) {{
 # 2. LFD SV
 f_lfd_sv <- get_latest("LFD_SV")
 if(!is.null(f_lfd_sv)) {{
+  cat("Processing:", basename(f_lfd_sv), "\\n")
   res <- readRDS(f_lfd_sv)
   df <- bind_rows(lapply(res, function(x) x$summary_df))
   write.csv(df, file.path(out_dir, "LFD_SV.csv"), row.names=FALSE)
@@ -90,6 +107,7 @@ if(!is.null(f_lfd_sv)) {{
 # 3. HFD Realised GARCH
 f_hfd_rg <- get_latest("realgarch")
 if(!is.null(f_hfd_rg)) {{
+  cat("Processing:", basename(f_hfd_rg), "\\n")
   res <- readRDS(f_hfd_rg)
   df <- bind_rows(lapply(names(res), function(nm) {{
     x <- res[[nm]]
@@ -110,6 +128,7 @@ if(!is.null(f_hfd_rg)) {{
 # 4. HFD HAR-RV
 f_hfd_har <- get_latest("harrv")
 if(!is.null(f_hfd_har)) {{
+  cat("Processing:", basename(f_hfd_har), "\\n")
   res <- readRDS(f_hfd_har)
   df <- bind_rows(lapply(names(res), function(nm) {{
     x <- res[[nm]]
@@ -130,15 +149,19 @@ if(!is.null(f_hfd_har)) {{
 """
     
     r_script_path = "temp_extractor.R"
-    with open(r_script_path, "w") as f:
+    with open(r_script_path, "w", encoding="utf-8") as f:
         f.write(r_extractor_script)
         
     try:
         subprocess.run(["Rscript", r_script_path], check=True, capture_output=True, text=True)
         print(" -> RDS data successfully extracted to temporary CSVs.\n")
     except subprocess.CalledProcessError as e:
-        print(" -> Error executing R extraction script. Ensure Rscript is in your system PATH.")
+        print(" -> Error executing R extraction script.")
         print(e.stderr)
+        if os.path.exists(temp_csv_dir):
+            shutil.rmtree(temp_csv_dir)
+        if os.path.exists(r_script_path):
+            os.remove(r_script_path)
         return
     except FileNotFoundError:
         print(" -> 'Rscript' command not found. Please ensure R is installed and in your PATH.")
@@ -194,8 +217,10 @@ if(!is.null(f_hfd_har)) {{
     # ---------------------------------------------------------
     # TASK 4: CLEANUP
     # ---------------------------------------------------------
-    shutil.rmtree(temp_csv_dir)
-    os.remove(r_script_path)
+    if os.path.exists(temp_csv_dir):
+        shutil.rmtree(temp_csv_dir)
+    if os.path.exists(r_script_path):
+        os.remove(r_script_path)
     
     print("\n======================================================")
     print(" COMPILATION COMPLETE! ")
