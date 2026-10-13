@@ -7,13 +7,9 @@
 # ==============================================================================
 
 # 1. Load Required Packages
+# 1. Load Required Packages
 required_packages <- c("readxl", "dplyr", "rugarch", "forecast", "ggplot2", "patchwork")
-for (pkg in required_packages) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-    library(pkg, character.only = TRUE)
-  }
-}
+lapply(required_packages, library, character.only = TRUE, quietly = TRUE)
 
 # 2. Output Directories
 output_dir_png <- "Pipeline_Outputs/PNG_Plots/LFD_GARCH"
