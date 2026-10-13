@@ -17,25 +17,31 @@ for (pkg in required_packages) {
   }
 }
 
-# 2. Setup Output Directories
-output_dir_png <- "Pipeline_Outputs/PNG_Plots/LFD_XGBOOST"
-output_dir_rds <- "Pipeline_Outputs/RDS_Models"
+# 2. Setup Output Directories (routed to ECMT3150 OUTPUTS)
+output_dir_png <- "../ECMT3150 OUTPUTS/Pipeline_Outputs/PNG_Plots/LFD_XGBOOST"
+output_dir_rds <- "../ECMT3150 OUTPUTS/Pipeline_Outputs/RDS_Models"
 dir.create(output_dir_png, recursive = TRUE, showWarnings = FALSE)
 dir.create(output_dir_rds, recursive = TRUE, showWarnings = FALSE)
 
 # 3. Dynamic File Search for LFD Excel Data
-search_path <- if (dir.exists("ECMT3150_LSEG_Output")) "ECMT3150_LSEG_Output" else "."
+search_path <- if (dir.exists("../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs")) {
+  "../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs"
+} else if (dir.exists("../ECMT3150 OUTPUTS")) {
+  "../ECMT3150 OUTPUTS"
+} else {
+  ".."
+}
 
 lfd_files <- list.files(
   path = search_path, 
-  pattern = "LSEG_LFD_.*\\.xlsx$", 
+  pattern = ".*LSEG_LFD.*\\.xlsx$", 
   full.names = TRUE, 
   recursive = TRUE,
   ignore.case = TRUE
 )
 
 if (length(lfd_files) == 0) {
-  stop("Error: No 'LSEG_LFD_*.xlsx' file found inside the target directory or subfolders.")
+  stop("Error: No 'LSEG_LFD_*.xlsx' file found inside ECMT3150 OUTPUTS or working directories.")
 }
 
 target_file <- lfd_files[order(file.info(lfd_files)$mtime, decreasing = TRUE)][1]
@@ -45,7 +51,6 @@ cat("\n======================================================\n")
 cat("Located LFD File  :", target_file, "\n")
 cat("Extraction Date   :", extraction_date, "\n")
 cat("======================================================\n\n")
-
 # 4. Load Data & Read Returns Sheet
 log_returns <- read_excel(target_file, sheet = "Returns")
 date_col <- if ("Date" %in% names(log_returns)) "Date" else names(log_returns)[1]
