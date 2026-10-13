@@ -1,5 +1,5 @@
 # ==============================================================================
-# Script Name: LFD_XGBOOST.R
+# Script Name: LFD_XGBOOST_MODEL.R
 # Pipeline Stage: Stage 2 - Low-Frequency Machine Learning Pipeline
 # Description: Dynamically locates LSEG LFD Excel file, extracts daily returns,
 #              fits standard GARCH(1,1) and Stochastic Volatility (SV) models
