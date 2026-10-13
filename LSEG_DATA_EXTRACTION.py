@@ -68,12 +68,11 @@ OUTPUT_DATE = None
 # ------------------------------------------------------------------------------
 
 FIELDS = [
-    "TRDPRC_1",
-    "OPEN_PRC",
-    "HIGH_1",
-    "LOW_1",
-    "ACVOL_UNS",
+    "BID",
+    "ASK",
+    "MID_PRICE",    
 ]
+
 
 # ADJUSTMENTS - how prices are adjusted for corporate actions.
 #     None           LSEG default (adjusted for splits and other capital
@@ -103,7 +102,7 @@ COMPUTE_RETURNS = True
 
 RETURN_TYPE = "log"
 
-RETURN_PRICE_FIELD = "TRDPRC_1"
+RETURN_PRICE_FIELD = "MID_PRICE"
 
 
 # ------------------------------------------------------------------------------
@@ -1715,9 +1714,12 @@ def merge_dataset_workbooks(frequency_tag, sources, output_path, status_rows):
                             value=source_cell.value,
                         )
                         if source_cell.has_style:
-                            target_cell._style = copy(source_cell._style)
-                        if source_cell.number_format:
-                            target_cell.number_format = source_cell.number_format
+                            if source_cell.font: target_cell.font = copy(source_cell.font)
+                            if source_cell.border: target_cell.border = copy(source_cell.border)
+                            if source_cell.fill: target_cell.fill = copy(source_cell.fill)
+                            if source_cell.number_format: target_cell.number_format = copy(source_cell.number_format)
+                            if source_cell.alignment: target_cell.alignment = copy(source_cell.alignment)
+                            if source_cell.protection: target_cell.protection = copy(source_cell.protection)
                         if source_cell.hyperlink:
                             target_cell._hyperlink = copy(source_cell.hyperlink)
                         if source_cell.comment:
