@@ -407,8 +407,8 @@ ECMT3150_PIPELINE/
 | :--- | :--- | :--- |
 | `ORCHESTRATOR.py` | Python script | Main entry point; config, dependencies, subprocess order, run status, logging |
 | `LSEGEXTRACTION.py` | Python script | LSEG connection, extraction, normalization, metadata, extraction validation |
-| `HFD.xlsx` | Data file | Intraday input; minute bars or explicitly configured trade/quote data |
-| `LFD.xlsx` | Data file | Daily OHLCV/adjusted prices and derived daily returns |
+| `LSEG_HFD.xlsx` | Data file | Intraday input; minute bars or explicitly configured trade/quote data |
+| `LSEG_LFD.xlsx` | Data file | Daily OHLCV/adjusted prices and derived daily returns |
 | `HFD_Realised_GARCH.R` | R script | Fits a realized-volatility/return model and exports forecasts/diagnostics |
 | `HFD_HAR-RV.R` | R script | Fits HAR-RV realized-volatility forecasts |
 | `LFD_GARCH(1,1).R` | R script | Fits daily GARCH(1,1) conditional variance |
