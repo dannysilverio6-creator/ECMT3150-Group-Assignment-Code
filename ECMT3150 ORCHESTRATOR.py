@@ -219,6 +219,9 @@ PIPELINE_STAGES = [
 # Optional report files are checked only if the Diagnostic script creates them.
 OPTIONAL_FINAL_OUTPUTS = ["Run_Report.pdf", "Run_Report.html"]
 
+# Optional report files are checked only if the Diagnostic script creates them.
+OPTIONAL_FINAL_OUTPUTS = ["Run_Report.pdf", "Run_Report.html"]
+
 # ------------------------------- LOGGING -------------------------------------
 
 RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
