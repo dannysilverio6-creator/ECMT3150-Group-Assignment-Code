@@ -148,7 +148,7 @@ MAX_RETRIES = 2
 #
 # ------------------------------------------------------------------------------
 
-OUTPUT_FOLDER = "ECMT3150_LSEG_Output"
+OUTPUT_FOLDER = "../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs"
 
 TIMESTAMPED_RUN_FOLDER = False
 
