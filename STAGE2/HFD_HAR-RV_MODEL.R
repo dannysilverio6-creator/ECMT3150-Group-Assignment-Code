@@ -13,15 +13,23 @@
 required_packages <- c("readxl", "dplyr", "lubridate", "ggplot2", "patchwork", "zoo", "tidyr")
 lapply(required_packages, library, character.only = TRUE, quietly = TRUE)
 
-# 2. Setup Output Directories
-output_dir_png <- "Pipeline_Outputs/PNG_Plots/HFD_HAR_RV"
-output_dir_rds <- "Pipeline_Outputs/RDS_Models"
+# 2. Setup Output Directories (routed to ECMT3150 OUTPUTS)
+output_dir_png <- "../ECMT3150 OUTPUTS/Pipeline_Outputs/PNG_Plots/HFD_HAR_RV"
+output_dir_rds <- "../ECMT3150 OUTPUTS/Pipeline_Outputs/RDS_Models"
 dir.create(output_dir_png, recursive = TRUE, showWarnings = FALSE)
 dir.create(output_dir_rds, recursive = TRUE, showWarnings = FALSE)
 
 # 3. Dynamic File Detection inside output directories
+search_path <- if (dir.exists("../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs")) {
+  "../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs"
+} else if (dir.exists("../ECMT3150 OUTPUTS")) {
+  "../ECMT3150 OUTPUTS"
+} else {
+  ".."
+}
+
 hfd_files <- list.files(
-  path = ".", 
+  path = search_path, 
   pattern = ".*HFD.*\\.xlsx$", 
   full.names = TRUE, 
   recursive = TRUE,
@@ -29,10 +37,9 @@ hfd_files <- list.files(
 )
 
 if (length(hfd_files) == 0) {
-  stop("Error: No HFD Excel file found inside LSEG_outputs or working directory.")
+  stop("Error: No HFD Excel file found inside ECMT3150 OUTPUTS or working directories.")
 }
 
-# Pick the most recently modified HFD file
 target_file <- hfd_files[order(file.info(hfd_files)$mtime, decreasing = TRUE)][1]
 extraction_date <- sub("^.*?(?:HFD_|HFD_)(.*?)\\.xlsx$", "\\1", basename(target_file))
 if (nchar(extraction_date) == 0 || grepl("\\.xlsx", extraction_date)) {
