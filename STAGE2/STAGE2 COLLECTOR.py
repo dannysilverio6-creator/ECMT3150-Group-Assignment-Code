@@ -1,5 +1,5 @@
 # ==============================================================================
-# Script Name: BENCHMARK.py
+# Script Name: STAGE2 COLLECTOR.py
 # Pipeline Stage: Stage 3 - Results Aggregation & Benchmark Compilation
 # Description: Scans all output directories for RDS model files and PNG
 #              diagnostic dashboards. Safely extracts key statistical benchmarks
