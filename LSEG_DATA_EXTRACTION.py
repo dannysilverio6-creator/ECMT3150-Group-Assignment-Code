@@ -1933,7 +1933,7 @@ def main():
             )
             status_rows.append((dataset_tag, status, detail))
 
-        final_name = f"LSEG_{frequency_tag}_{output_date}.xlsx"
+        final_name = f"LSEG_{frequency_tag}.xlsx"
         final_path = os.path.join(run_folder, final_name)
         try:
             final_path = merge_dataset_workbooks(
