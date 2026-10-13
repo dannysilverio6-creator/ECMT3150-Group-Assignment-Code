@@ -3,7 +3,7 @@
 # Pipeline Stage: Stage 2 - Low-Frequency GARCH Volatility Modeling
 # Description: Fits GARCH(1,1) on daily returns from LSEG_LFD_*.xlsx,
 #              exports publication-quality ggplot2 diagnostic dashboards, 
-#              and saves LFD_GARCH_*.rds output[cite: 3].
+#              and saves LFD_GARCH_*.rds output.
 # ==============================================================================
 
 # 1. Load Required Packages
@@ -22,15 +22,19 @@ dir.create(output_dir_png, recursive = TRUE, showWarnings = FALSE)
 dir.create(output_dir_rds, recursive = TRUE, showWarnings = FALSE)
 
 # 3. Dynamic File Search for LFD Excel Data
+# Explicitly targets the Python extraction output folder while retaining fallback
+search_path <- if (dir.exists("ECMT3150_LSEG_Output")) "ECMT3150_LSEG_Output" else "."
+
 lfd_files <- list.files(
-  path = ".", 
-  pattern = "^LSEG_LFD_.*\\.xlsx$", 
+  path = search_path, 
+  pattern = "LSEG_LFD_.*\\.xlsx$", 
   full.names = TRUE, 
-  recursive = TRUE
+  recursive = TRUE,
+  ignore.case = TRUE
 )
 
 if (length(lfd_files) == 0) {
-  stop("Error: No 'LSEG_LFD_*.xlsx' file found inside working directory or subfolders.")
+  stop("Error: No 'LSEG_LFD_*.xlsx' file found inside the target directory or subfolders.")
 }
 
 target_file <- lfd_files[order(file.info(lfd_files)$mtime, decreasing = TRUE)][1]
