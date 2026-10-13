@@ -12,7 +12,7 @@
 INSTRUMENTS = {
     "XAU=": "Gold (Spot)",
     "XAG=": "Silver (Spot)",
-    "UXXc1": "Uranium (Active Futures)"
+    "U_u.TO": "Sprott Physical Uranium Trust (USD)"
 }
 
 
