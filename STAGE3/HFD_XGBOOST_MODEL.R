@@ -1,5 +1,5 @@
 # ==============================================================================
-# Script Name: HFD_XGBOOST.R
+# Script Name: HFD_XGBOOST_MODEL.R
 # Pipeline Stage: Stage 2 - High-Frequency Machine Learning Pipeline
 # Description: Dynamically locates LSEG HFD Excel file, aggregates intraday data,
 #              extracts HAR-RV lags (Daily, Weekly, Monthly RV) and Realized 
