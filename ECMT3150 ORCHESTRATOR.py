@@ -103,6 +103,16 @@ PIPELINE_STAGES = [
         "outputs": ["LSEG_HFD.xlsx", "LSEG_LFD.xlsx"],
     },
     {
+        "id": "stage2_install",
+        "stage": 2,
+        "name": "Stage 2 Prerequisites Installation",
+        "runtime": "r",
+        "script": "STAGE2/STAGE2_INSTALLATIONS.R",
+        "required": True,
+        "depends_on": ["extract"],
+        "outputs": [],
+    },
+    {
         "id": "hfd_realized_garch",
         "stage": 2,
         "name": "HFD Realized GARCH",
