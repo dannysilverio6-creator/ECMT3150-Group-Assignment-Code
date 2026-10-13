@@ -9,13 +9,9 @@
 # ==============================================================================
 
 # 1. Load required libraries
+# 1. Load required libraries
 required_packages <- c("readxl", "dplyr", "lubridate", "ggplot2", "patchwork", "zoo", "tidyr")
-for (pkg in required_packages) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-    library(pkg, character.only = TRUE)
-  }
-}
+lapply(required_packages, library, character.only = TRUE, quietly = TRUE)
 
 # 2. Setup Output Directories
 output_dir_png <- "Pipeline_Outputs/PNG_Plots/HFD_HAR_RV"
