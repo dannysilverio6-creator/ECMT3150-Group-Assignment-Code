@@ -23,9 +23,9 @@ This document provides a comprehensive specification of the end-to-end econometr
              +------------------+------------------+
              |                                     |
              v                                     v
-       +-----------+                         +-----------+
-       | HFD.xlsx  |                         | LFD.xlsx  |
-       +-----+-----+                         +-----+-----+
+    +----------------+                    +----------------+
+    | LSEG_HFD.xlsx  |                    | LSEG_LFD.xlsx  |
+    +--------+-------+                    +--------+-------+
              |                                     |
              v                                     v
     [HFD_Realised_GARCH.R]                 [LFD_GARCH(1,1).R]
