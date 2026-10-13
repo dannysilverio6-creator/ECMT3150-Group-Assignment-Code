@@ -148,10 +148,9 @@ if(!is.null(f_hfd_har)) {{
     # TASK 3: WRITE MASTER EXCEL WORKBOOKS
     # ---------------------------------------------------------
     print("Task 3: Constructing Benchmark Workbooks...")
-    date_str = datetime.now().strftime("%Y-%m-%d")
     
     # -- A. LFD_BENCHMARK.xlsx --
-    lfd_path = os.path.join(output_dir_compiled, f"LFD_BENCHMARK_{date_str}.xlsx")
+    lfd_path = os.path.join(output_dir_compiled, "LFD_BENCHMARK.xlsx")
     lfd_garch_csv = os.path.join(temp_csv_dir, "LFD_GARCH.csv")
     lfd_sv_csv = os.path.join(temp_csv_dir, "LFD_SV.csv")
     
@@ -167,11 +166,12 @@ if(!is.null(f_hfd_har)) {{
     if wrote_lfd:
         print(f" -> Created: {lfd_path}")
     else:
-        os.remove(lfd_path)
+        if os.path.exists(lfd_path):
+            os.remove(lfd_path)
         print(" -> No LFD models found to compile.")
 
     # -- B. HFD_BENCHMARK.xlsx --
-    hfd_path = os.path.join(output_dir_compiled, f"HFD_BENCHMARK_{date_str}.xlsx")
+    hfd_path = os.path.join(output_dir_compiled, "HFD_BENCHMARK.xlsx")
     hfd_rg_csv = os.path.join(temp_csv_dir, "HFD_RealGARCH.csv")
     hfd_har_csv = os.path.join(temp_csv_dir, "HFD_HARRV.csv")
     
@@ -187,7 +187,8 @@ if(!is.null(f_hfd_har)) {{
     if wrote_hfd:
         print(f" -> Created: {hfd_path}")
     else:
-        os.remove(hfd_path)
+        if os.path.exists(hfd_path):
+            os.remove(hfd_path)
         print(" -> No HFD models found to compile.")
 
     # ---------------------------------------------------------
@@ -205,5 +206,3 @@ if(!is.null(f_hfd_har)) {{
 
 if __name__ == "__main__":
     main()
-
-
