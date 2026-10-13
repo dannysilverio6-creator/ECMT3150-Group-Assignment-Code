@@ -11,22 +11,32 @@
 required_packages <- c("readxl", "dplyr", "forecast", "ggplot2", "patchwork", "stochvol")
 lapply(required_packages, library, character.only = TRUE, quietly = TRUE)
 
-# 2. Setup Output Directories
-output_dir_png <- "Pipeline_Outputs/PNG_Plots/LFD_SV"
-output_dir_rds <- "Pipeline_Outputs/RDS_Models"
+# 2. Setup Output Directories (routed to ECMT3150 OUTPUTS)
+output_dir_png <- "../ECMT3150 OUTPUTS/Pipeline_Outputs/PNG_Plots/LFD_SV"
+output_dir_rds <- "../ECMT3150 OUTPUTS/Pipeline_Outputs/RDS_Models"
 dir.create(output_dir_png, recursive = TRUE, showWarnings = FALSE)
 dir.create(output_dir_rds, recursive = TRUE, showWarnings = FALSE)
 
 # 3. Dynamic Search for Low-Frequency Excel Data
+# Targets the nested ECMT3150 OUTPUTS LSEG folder with fallback options
+search_path <- if (dir.exists("../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs")) {
+  "../ECMT3150 OUTPUTS/ECMT3150_LSEG_OUTPUTs"
+} else if (dir.exists("../ECMT3150 OUTPUTS")) {
+  "../ECMT3150 OUTPUTS"
+} else {
+  ".."
+}
+
 lfd_files <- list.files(
-  path = ".", 
-  pattern = "^LSEG_LFD_.*\\.xlsx$", 
+  path = search_path, 
+  pattern = ".*LSEG_LFD.*\\.xlsx$", 
   full.names = TRUE, 
-  recursive = TRUE
+  recursive = TRUE,
+  ignore.case = TRUE
 )
 
 if (length(lfd_files) == 0) {
-  stop("Error: No 'LSEG_LFD_*.xlsx' file found inside working directory or subfolders.")
+  stop("Error: No 'LSEG_LFD_*.xlsx' file found inside ECMT3150 OUTPUTS or working directories.")
 }
 
 target_file <- lfd_files[order(file.info(lfd_files)$mtime, decreasing = TRUE)][1]
