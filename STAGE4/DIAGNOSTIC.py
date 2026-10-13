@@ -14,8 +14,7 @@ import pandas as pd
 from datetime import datetime
 
 def create_dir(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
+    os.makedirs(path, exist_ok=True)
 
 def main():
     print("======================================================")
@@ -23,15 +22,26 @@ def main():
     print(f" Date: {datetime.now().strftime('%Y-%m-%d')}")
     print("======================================================\n")
 
+    # Resolve Base Output Directory (Targeting ECMT3150 OUTPUTS)
+    if os.path.exists("../ECMT3150 OUTPUTS"):
+        base_output_dir = os.path.abspath("../ECMT3150 OUTPUTS/Pipeline_Outputs")
+        base_root_dir = os.path.abspath("../ECMT3150 OUTPUTS")
+    else:
+        base_output_dir = os.path.abspath("Pipeline_Outputs")
+        base_root_dir = os.path.abspath(".")
+
     # 1. Directory Setup
-    results_dir = os.path.join("Pipeline_Outputs", "Consolidated_Results")
-    plots_source_dir = os.path.join("Pipeline_Outputs", "Consolidated_Plots")
+    results_dir = os.path.join(base_output_dir, "Consolidated_Results")
+    plots_source_dir = os.path.join(base_output_dir, "Consolidated_Plots")
     
-    output_dir_compiled = os.path.join("Pipeline_Outputs", "Conclusive_Results")
-    photos_dir = "PHOTOS"
+    output_dir_compiled = os.path.join(base_output_dir, "Conclusive_Results")
+    photos_dir = os.path.join(base_root_dir, "PHOTOS")
     
     create_dir(output_dir_compiled)
     create_dir(photos_dir)
+
+    print(f"Reading Benchmarks from : {results_dir}")
+    print(f"Reading Plots from      : {plots_source_dir}\n")
 
     # ---------------------------------------------------------
     # TASK 1: SEGREGATE PLOTS INTO PHOTOS/ DIRECTORY BY MODEL
@@ -51,6 +61,7 @@ def main():
     # Create subfolders inside PHOTOS/
     for folder_name in model_categories.values():
         create_dir(os.path.join(photos_dir, folder_name))
+    create_dir(os.path.join(photos_dir, "Misc"))
 
     copied_plots_count = 0
     if os.path.exists(plots_source_dir):
@@ -62,7 +73,6 @@ def main():
                 # Match file name to corresponding model category
                 target_subfolder = "Misc"
                 for key, subfolder in model_categories.items():
-                    # Check if key tokens are present in the filename
                     tokens = key.replace("_", "").upper()
                     if tokens in file_upper.replace("_", ""):
                         target_subfolder = subfolder
@@ -128,12 +138,11 @@ def main():
                     })
             elif "R_Squared" in df.columns and "Ticker" in df.columns: # For HAR-RV
                 for _, row in df.iterrows():
-                    # Convert pseudo AIC/BIC or rank by R2 / Adj R2
                     summary_leaderboard_rows.append({
                         "Frequency": "HFD",
                         "Model": sheet,
                         "Ticker": row["Ticker"],
-                        "Criterion_AIC": -(row["Adj_R_Squared"] * 100), # Lower is better pseudo score representation
+                        "Criterion_AIC": -(row["Adj_R_Squared"] * 100), # Lower score representation
                         "Criterion_BIC": None
                     })
         print(f" -> Loaded HFD benchmarks from {hfd_benchmark_path}")
@@ -143,12 +152,9 @@ def main():
     # ---------------------------------------------------------
     if summary_leaderboard_rows:
         lb_df = pd.DataFrame(summary_leaderboard_rows)
-        
-        # Drop rows with missing AIC scores to ensure clean evaluation
         lb_clean = lb_df.dropna(subset=["Criterion_AIC"])
         
         if not lb_clean.empty:
-            # Find the model with the minimum AIC (or equivalent evaluation score) per Ticker
             best_models_idx = lb_clean.groupby(["Frequency", "Ticker"])["Criterion_AIC"].idxmin()
             best_models_df = lb_clean.loc[best_models_idx].copy()
             best_models_df = best_models_df.rename(columns={"Model": "Best_Model_Selected", "Criterion_AIC": "Min_AIC_Score"})
