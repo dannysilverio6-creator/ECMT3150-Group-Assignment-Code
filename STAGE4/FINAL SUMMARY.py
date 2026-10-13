@@ -15,10 +15,19 @@ import numpy as np
 from pathlib import Path
 
 def run_advanced_summary():
-    # Define paths relative to the project root (assuming script is in STAGE4/)
-    base_dir = Path(__file__).resolve().parent.parent
-    input_dir_excel = base_dir / "Pipeline_Outputs" / "Excel_Summaries"
-    output_path = base_dir / "ECMT3150_Final_Best_Model_Analysis.md"
+    # Resolve base directories robustly with support for ECMT3150 OUTPUTS
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parent
+    
+    if (project_root.parent / "ECMT3150 OUTPUTS").exists():
+        base_output_dir = project_root.parent / "ECMT3150 OUTPUTS" / "Pipeline_Outputs"
+        output_root = project_root.parent / "ECMT3150 OUTPUTS"
+    else:
+        base_output_dir = project_root / "Pipeline_Outputs"
+        output_root = project_root
+
+    input_dir_excel = base_output_dir / "Excel_Summaries"
+    output_path = output_root / "ECMT3150_Final_Best_Model_Analysis.md"
     
     os.makedirs(input_dir_excel, exist_ok=True)
 
@@ -57,7 +66,7 @@ def run_advanced_summary():
     tickers = sorted(list(tickers))
 
     if not tickers:
-        print("Warning: No ticker summaries found across Excel files. Ensure earlier stages output to Pipeline_Outputs/Excel_Summaries.")
+        print(f"Warning: No ticker summaries found in {input_dir_excel}. Ensure earlier stages output correctly.")
         return False
 
     executive_rows = []
@@ -129,8 +138,6 @@ def run_advanced_summary():
     # ---------------------------------------------------------
     # MARKDOWN FORMATTING & EXPORT
     # ---------------------------------------------------------
-    
-    # Helper function to generate clean Markdown tables safely
     def df_to_markdown_table(df):
         header = "| " + " | ".join(str(c) for c in df.columns) + " |"
         separator = "| " + " | ".join("---" for _ in df.columns) + " |"
@@ -141,21 +148,17 @@ def run_advanced_summary():
 
     try:
         with open(output_path, 'w', encoding='utf-8') as md_file:
-            # Write Document Header
             md_file.write("# ECMT3150 Quantitative Pipeline - Executive Best Model Analysis\n\n")
             
-            # Write Sheet 1 equivalent
             md_file.write("## 1. Executive Summary\n\n")
             md_file.write(df_to_markdown_table(df_executive))
             md_file.write("\n\n")
             
-            # Write Sheet 2 equivalent
             if hfd_imp is not None and not hfd_imp.empty:
                 md_file.write("## 2. HFD XGBoost Feature Importance\n\n")
                 md_file.write(df_to_markdown_table(hfd_imp))
                 md_file.write("\n\n")
             
-            # Write Sheet 3 equivalent
             if lfd_imp is not None and not lfd_imp.empty:
                 md_file.write("## 3. LFD XGBoost Feature Importance\n\n")
                 md_file.write(df_to_markdown_table(lfd_imp))
@@ -164,7 +167,6 @@ def run_advanced_summary():
         print(f"Success! Advanced Final Best Model Analysis generated.")
         print(f"Saved to: {output_path}\n")
         
-        # Print a stylized console summary for the terminal
         print(df_executive[["Asset / Ticker", "Best HFD Model", "Best LFD Model", "HFD ML Improv. %"]].to_string(index=False))
         return True
         
