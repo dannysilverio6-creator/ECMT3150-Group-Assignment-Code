@@ -16,9 +16,9 @@ This document provides a comprehensive specification of the end-to-end econometr
                       +---------+---------+
                                 |
                                 v
-                      +--------------------+
-                      |  LSEGEXTRACTION.py |
-                      +---------+----------+
+                   +--------------------------+
+                   |  LSEG_DATA_EXTRACTION.py |
+                   +------------+-------------+
                                 |
              +------------------+------------------+
              |                                     |
