@@ -23,7 +23,7 @@ _Generated 2026-10-15 12:53 from the pipeline outputs. Every number below is rea
 
 Volatility is annualised (x sqrt(252)). BF = Brown-Forsythe test of equal variances (robust to fat tails). Full-sample = all data since 2023 vs all post-event data.
 
-| Ticker | Vol % 60d before | Vol % 60d after | Ratio | BF p | Full-sample ratio | Full-sample BF p | Return first 5d % | Return first 20d % | Max |move| first 5d % | Obs pre / post |
+| Ticker | Vol % 60d before | Vol % 60d after | Ratio | BF p | Full-sample ratio | Full-sample BF p | Return first 5d % | Return first 20d % | Max \|move\| first 5d % | Obs pre / post |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | XAU= | 36.9 | 26.3 | 0.71 | 0.494 | 1.40 | <0.001 | -2.04 | -16.10 | 4.61 | 815 / 159 |
 | XAG= | 106.8 | 55.3 | 0.52 | 0.045 | 1.19 | <0.001 | -10.64 | -29.62 | 8.63 | 815 / 159 |
