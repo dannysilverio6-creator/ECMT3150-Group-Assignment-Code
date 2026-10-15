@@ -58,6 +58,7 @@ all_harrv_results <- list()
 summary_rows <- list()
 metric_rows <- list()
 forecast_rows <- list()
+cf_rows <- list()
 options(device.ask.default = FALSE)
 
 # ---- 3. Master loop ------------------------------------------------------------
@@ -105,35 +106,53 @@ for (current_ric in unique_rics) {
       " Beta_Monthly =", round(pars["RV_Monthly"], 4), "\n",
       " R-Squared =", round(r_squared, 4), "\n")
 
-  # Out-of-sample, expanding window: re-estimate on every row whose target is
-  # known at the forecast origin, then forecast the next block.
-  # The regression is estimated in logs (log-HAR, Corsi 2009) - realised
+  # Event-study forecasts (Frozen / Adaptive, see ECMT3150_COMMON.R). Each
+  # estimation uses only rows whose target is known at the forecast origin.
+  # The regression is estimated in logs (log-HAR, Corsi 2009): realised
   # volatility is strongly right-skewed and a levels HAR can forecast NEGATIVE
   # volatility in small samples. Forecasts are mapped back with the lognormal
   # bias correction exp(mu + s^2 / 2).
-  is_test <- ecmt_test_rows(har_data)
-  blocks <- ecmt_refit_blocks(har_data, is_test, ECMT_REFIT_EVERY_HFD)
-  oos_forecast <- ecmt_blocked_forecasts(
-    har_data, blocks,
-    fit_fun = function(est_n) {
-      lm(log(RV_Target) ~ log(RV_Daily) + log(RV_Weekly) + log(RV_Monthly),
-         data = har_data[har_data$Row_Index + 1 <= est_n, ])
-    },
+  split <- ecmt_event_split(har_data, "HFD")
+  log_har <- function(rows) lm(log(RV_Target) ~ log(RV_Daily) + log(RV_Weekly) + log(RV_Monthly),
+                               data = har_data[rows, ])
+  oos_fc <- ecmt_event_forecasts(
+    har_data, split, ECMT_REFIT_EVERY_HFD,
+    fit_fun = function(est_n) log_har(har_data$Row_Index + 1 <= est_n),
     forecast_fun = function(m, rows) {
       exp(as.numeric(predict(m, newdata = har_data[rows, ])) + summary(m)$sigma^2 / 2)
     }
   )
-  train_fit <- lm(log(RV_Target) ~ log(RV_Daily) + log(RV_Weekly) + log(RV_Monthly),
-                  data = har_data[!is_test, ])
-  metric_rows[[current_ric]] <- cbind(
-    ecmt_metrics_row("HFD_HAR-RV", current_ric, har_data, is_test,
-                     oos_forecast, "RV_Target", "Next-day realised volatility (%)"),
-    OOS_Specification = "log-HAR", Refits = attr(oos_forecast, "n_fits"))
-  forecast_rows[[current_ric]] <- ecmt_forecast_rows("HFD_HAR-RV", current_ric, har_data, is_test,
-                                                     oos_forecast, "RV_Target")
-  cat(sprintf("  OOS (%s to %s, n=%d): RMSE = %.4f | MAE = %.4f\n",
-              metric_rows[[current_ric]]$Test_Start, metric_rows[[current_ric]]$Test_End,
-              metric_rows[[current_ric]]$N_Test, metric_rows[[current_ric]]$RMSE, metric_rows[[current_ric]]$MAE))
+  res <- ecmt_collect_schemes(oos_fc, "HFD_HAR-RV", current_ric, har_data, split,
+                              "RV_Target", "Next-day realised volatility (%)")
+  res$metrics$OOS_Specification <- "log-HAR"
+  metric_rows[[current_ric]] <- res$metrics
+  forecast_rows[[current_ric]] <- res$forecasts
+  ecmt_print_oos(res)
+
+  # "No-conflict" counterfactual: log-HAR estimated on pre-event days only and
+  # iterated forward over the post-event sample (each step feeds the previous
+  # forecast back into the daily/weekly/monthly components), never using a
+  # post-event realised volatility.
+  n_pre <- ecmt_pre_event_n(daily_data$Date); n_post <- nrow(daily_data) - n_pre
+  train_fit <- log_har(har_data$Row_Index + 1 <= n_pre)
+  if (n_post > 0) {
+    b <- coef(train_fit); s_res <- summary(train_fit)$sigma
+    hist <- daily_data$Realized_Vol[1:n_pre]
+    mu <- numeric(n_post)
+    for (h in seq_len(n_post)) {
+      k <- length(hist)
+      mu[h] <- b[1] + b[2] * log(hist[k]) + b[3] * log(mean(hist[(k - 4):k])) +
+        b[4] * log(mean(hist[max(1, k - 21):k]))
+      hist <- c(hist, exp(mu[h]))
+    }
+    post <- (n_pre + 1):nrow(daily_data)
+    cf_rows[[current_ric]] <- data.frame(
+      Model = "HFD_HAR-RV", Ticker = current_ric, Date = daily_data$Date[post], Horizon = seq_len(n_post),
+      CF_RV = exp(mu + s_res^2 / 2), CF_LogRV_Mean = mu, CF_LogRV_SD = s_res,
+      CF_RV_Lower90 = exp(mu - 1.645 * s_res), CF_RV_Upper90 = exp(mu + 1.645 * s_res),
+      Realized_Return = daily_data$Daily_Return[post], Realized_RV = daily_data$Realized_Vol[post],
+      stringsAsFactors = FALSE)
+  }
 
   # ---- Diagnostic dashboard ----
   max_y <- max(c(har_data$RV_Target, har_data$Predicted_RV), na.rm = TRUE) * 1.1
@@ -187,7 +206,7 @@ for (current_ric in unique_rics) {
   diagnostic_dashboard <- (p1 + p2) / (p3 + p4) +
     plot_annotation(
       title = paste("HAR-RV Diagnostics | Ticker:", current_ric),
-      subtitle = sprintf("Adj R-Squared: %.4f | OOS RMSE: %.4f", adj_r_squared, metric_rows[[current_ric]]$RMSE),
+      subtitle = sprintf("Adj R-Squared: %.4f | Post-event RMSE (adaptive): %.4f", adj_r_squared, metric_rows[[current_ric]]$RMSE[metric_rows[[current_ric]]$Scheme == "Adaptive"]),
       theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
                     plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"))
     )
@@ -232,6 +251,7 @@ saveRDS(all_harrv_results, file = dirs$rds)
 ecmt_write_tables(dirs, list(
   summary       = dplyr::bind_rows(summary_rows),
   oos_metrics   = dplyr::bind_rows(metric_rows),
-  oos_forecasts = dplyr::bind_rows(forecast_rows)
+  oos_forecasts = dplyr::bind_rows(forecast_rows),
+  counterfactual = dplyr::bind_rows(cf_rows)
 ))
 cat("\nProcess complete! HAR-RV results saved to", dirs$rds, "\n")

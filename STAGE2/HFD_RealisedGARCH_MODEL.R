@@ -87,6 +87,7 @@ all_garch_results <- list()
 summary_rows <- list()
 metric_rows <- list()
 forecast_rows <- list()
+cf_rows <- list()
 options(device.ask.default = FALSE)
 
 # ---- 3. Master loop ------------------------------------------------------------
@@ -129,18 +130,16 @@ for (current_ric in unique_rics) {
   cat("Fit complete! Log-Likelihood:", round(log_lik, 2),
       "| AIC:", round(info_crits[1], 4), "| Model:", model_type, "\n")
 
-  # Step 3: out-of-sample one-day-ahead forecasts on the common HFD frame,
-  # re-estimated every ECMT_REFIT_EVERY_HFD test days (expanding window).
-  # Each refit uses days up to the forecast origin only; the filter then gives
-  # sigma_{t+1} from information up to day t.
+  # Step 3: event-study one-day-ahead forecasts (Frozen / Adaptive, see
+  # ECMT3150_COMMON.R). Each estimation uses days up to the forecast origin
+  # only; the filter then gives sigma_{t+1} from information up to day t.
   frame <- ecmt_hfd_frame(daily_data)
-  sigma_next <- rep(NA_real_, nrow(frame))
+  sigma_fc <- list(Frozen = rep(NA_real_, nrow(frame)), Adaptive = rep(NA_real_, nrow(frame)))
   if (nrow(frame) >= 10) {
-    is_test <- ecmt_test_rows(frame)
-    blocks <- ecmt_refit_blocks(frame, is_test, ECMT_REFIT_EVERY_HFD)
+    split <- ecmt_event_split(frame, "HFD")
     used_realised <- logical(0)
-    sigma_next <- ecmt_blocked_forecasts(
-      frame, blocks,
+    sigma_fc <- ecmt_event_forecasts(
+      frame, split, ECMT_REFIT_EVERY_HFD,
       fit_fun = function(est_n) {
         fit_realgarch(daily_data$Daily_Return[1:est_n], daily_data$Realized_Vol[1:est_n],
                       daily_data$Date[1:est_n])
@@ -149,8 +148,7 @@ for (current_ric in unique_rics) {
         used_realised <<- c(used_realised, tr$realised)
         fixed_spec <- tr$spec
         setfixed(fixed_spec) <- as.list(coef(tr$fit))
-        last <- max(frame$Row_Index[rows]) + 1
-        idx <- 1:last
+        idx <- 1:(max(frame$Row_Index[rows]) + 1)
         x_ret <- xts::xts(daily_data$Daily_Return[idx], order.by = daily_data$Date[idx])
         filt <- if (tr$realised) {
           ugarchfilter(fixed_spec, data = x_ret,
@@ -161,23 +159,33 @@ for (current_ric in unique_rics) {
         as.numeric(sigma(filt))[frame$Row_Index[rows] + 1]
       }
     )
-    if (any(is.finite(sigma_next[is_test]))) {
-      oos_model_type <- if (all(used_realised)) "Realized GARCH" else if (!any(used_realised))
-        "Standard GARCH" else sprintf("Mixed (%d/%d Realized)", sum(used_realised), length(used_realised))
-      metric_rows[[current_ric]] <- cbind(
-        ecmt_metrics_row("HFD_Realised_GARCH", current_ric, frame, is_test, sigma_next,
-                         "RV_Target", "Next-day realised volatility (%)"),
-        OOS_Model_Type = oos_model_type,
-        Refits = attr(sigma_next, "n_fits"), Refit_Failures = attr(sigma_next, "n_failed")
-      )
-      forecast_rows[[current_ric]] <- ecmt_forecast_rows("HFD_Realised_GARCH", current_ric, frame,
-                                                         is_test, sigma_next, "RV_Target")
-      cat(sprintf("  OOS (%s to %s, n=%d, %d refits, %s): RMSE = %.4f | MAE = %.4f\n",
-                  metric_rows[[current_ric]]$Test_Start, metric_rows[[current_ric]]$Test_End,
-                  metric_rows[[current_ric]]$N_Test, attr(sigma_next, "n_fits"), oos_model_type,
-                  metric_rows[[current_ric]]$RMSE, metric_rows[[current_ric]]$MAE))
-    } else {
-      cat("  Training-sample fit failed - no OOS forecasts for", current_ric, "\n")
+    oos_model_type <- if (all(used_realised)) "Realized GARCH" else if (!any(used_realised))
+      "Standard GARCH" else sprintf("Mixed (%d/%d Realized)", sum(used_realised), length(used_realised))
+    res <- ecmt_collect_schemes(sigma_fc, "HFD_Realised_GARCH", current_ric, frame, split,
+                                "RV_Target", "Next-day realised volatility (%)")
+    res$metrics$OOS_Model_Type <- oos_model_type
+    metric_rows[[current_ric]] <- res$metrics
+    forecast_rows[[current_ric]] <- res$forecasts
+    ecmt_print_oos(res)
+
+    # "No-conflict" counterfactual: estimated on pre-event days only, then a
+    # multi-step forecast of return volatility (sigma) and of realised
+    # volatility (the Realized GARCH measurement equation) over the whole
+    # post-event sample, without seeing any post-event data.
+    n_pre <- ecmt_pre_event_n(daily_data$Date); n_post <- nrow(daily_data) - n_pre
+    cf <- if (n_post > 0) fit_realgarch(daily_data$Daily_Return[1:n_pre], daily_data$Realized_Vol[1:n_pre],
+                                        daily_data$Date[1:n_pre]) else NULL
+    if (!is.null(cf)) {
+      fc_cf <- ugarchforecast(cf$fit, n.ahead = n_post)
+      post <- (n_pre + 1):nrow(daily_data)
+      cf_rv <- if (cf$realised && !is.null(fc_cf@forecast$realizedFor))
+        as.numeric(fc_cf@forecast$realizedFor) else as.numeric(sigma(fc_cf))
+      cf_rows[[current_ric]] <- data.frame(
+        Model = "HFD_Realised_GARCH", Ticker = current_ric, Date = daily_data$Date[post],
+        Horizon = seq_len(n_post), CF_Sigma = as.numeric(sigma(fc_cf)), CF_RV = cf_rv,
+        Realized_Return = daily_data$Daily_Return[post], Realized_RV = daily_data$Realized_Vol[post],
+        Distribution = "normal", CF_Model_Type = ifelse(cf$realised, "Realized GARCH", "Standard GARCH"),
+        stringsAsFactors = FALSE)
     }
   } else {
     cat("  Fewer than 10 usable days after the 22-day HAR window - no OOS forecasts.\n")
@@ -263,7 +271,8 @@ for (current_ric in unique_rics) {
     summary_df     = summary_rows[[current_ric]],
     oos_metrics    = metric_rows[[current_ric]],
     # One-step-ahead sigma for every origin date (used as an XGBoost feature)
-    feature_series = data.frame(Date = frame$Date, RG_Sigma = sigma_next),
+    feature_series = data.frame(Date = frame$Date, RG_Sigma_Frozen = sigma_fc$Frozen,
+                                RG_Sigma_Adaptive = sigma_fc$Adaptive),
     source_file    = target_file
   )
 }
@@ -277,6 +286,7 @@ saveRDS(all_garch_results, file = dirs$rds)
 ecmt_write_tables(dirs, list(
   summary       = dplyr::bind_rows(summary_rows),
   oos_metrics   = dplyr::bind_rows(metric_rows),
-  oos_forecasts = dplyr::bind_rows(forecast_rows)
+  oos_forecasts = dplyr::bind_rows(forecast_rows),
+  counterfactual = dplyr::bind_rows(cf_rows)
 ))
 cat("\nProcess complete! Realized GARCH results saved to", dirs$rds, "\n")

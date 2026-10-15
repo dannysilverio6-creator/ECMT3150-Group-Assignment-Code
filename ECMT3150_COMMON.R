@@ -57,10 +57,6 @@ ECMT_RDS_DIR      <- file.path(ECMT_PIPELINE_DIR, "RDS_Models")
 ECMT_TABLE_DIR    <- file.path(ECMT_PIPELINE_DIR, "Model_Tables")
 ECMT_PNG_DIR      <- file.path(ECMT_PIPELINE_DIR, "PNG_Plots")
 
-# Fraction of the common modelling sample used for estimation/training.
-# Set ECMT3150_SPLIT=event to train on the Historical period and test on the
-# Event period instead (only possible with the merged Stage 1 workbooks).
-ECMT_TRAIN_FRACTION <- 0.8
 ECMT_SEED <- 3150
 
 # First trading day after the initial strikes (Sat 28 Feb 2026). Used by the
@@ -356,6 +352,7 @@ ecmt_hfd_frame <- function(daily) {
       RV_Monthly  = zoo::rollmeanr(Realized_Vol, k = 22, fill = NA),
       Target_Date = dplyr::lead(Date, 1),
       RV_Target   = dplyr::lead(Realized_Vol, 1),
+      Target_Abs_Return = abs(dplyr::lead(Daily_Return, 1)),
       Row_Index   = dplyr::row_number()
     ) %>%
     dplyr::filter(stats::complete.cases(RV_Daily, RV_Weekly, RV_Monthly, RV_Target)) %>%
@@ -371,61 +368,104 @@ ecmt_lfd_frame <- function(dates, ret_pct, period) {
       Vol_Monthly = zoo::rollmeanr(Abs_Return, k = 22, fill = NA),
       Target_Date = dplyr::lead(Date, 1),
       Target_Vol  = dplyr::lead(Abs_Return, 1),
+      Target_Abs_Return = dplyr::lead(Abs_Return, 1),
       Row_Index   = dplyr::row_number()
     ) %>%
     dplyr::filter(stats::complete.cases(Abs_Return, Vol_Weekly, Vol_Monthly, Target_Vol)) %>%
     as.data.frame()
 }
 
-# Chronological split of the common frame. Returns a logical vector (TRUE = test).
-ecmt_test_rows <- function(frame) {
+# ------------------------------------------------------------------------------
+# Event-study forecasting design
+# ------------------------------------------------------------------------------
+# Every frame row is a forecast origin t with a target on the next trading day.
+# Rows are labelled by WHEN THE TARGET FALLS:
+#   Train    : estimation sample (all targets well before the event)
+#   PreEvent : the last ECMT_PRE_WINDOW_* trading days before the event - a calm,
+#              genuinely out-of-sample benchmark of "normal" forecast accuracy
+#   Event    : targets on or after ECMT_EVENT_DATE - the shock and its aftermath
+#
+# Two estimation schemes are run for every model:
+#   Frozen   : parameters estimated once with data up to the start of PreEvent,
+#              and once more with ALL pre-event data at the event origin; never
+#              updated afterwards. Tests whether a model estimated on calm
+#              markets "holds up" when the shock arrives.
+#   Adaptive : the same, plus re-estimation every ECMT_REFIT_EVERY_* days on an
+#              expanding window - how quickly each model learns the new regime.
+# No forecast ever uses data after its origin.
+ECMT_PRE_WINDOW_LFD <- as.integer(Sys.getenv("ECMT3150_PRE_WINDOW_LFD", "60"))
+ECMT_PRE_WINDOW_HFD <- as.integer(Sys.getenv("ECMT3150_PRE_WINDOW_HFD", "5"))
+ECMT_MIN_TRAIN <- c(LFD = 250L, HFD = 8L)
+ECMT_SCHEMES <- c("Frozen", "Adaptive")
+
+# Post-event evaluation windows (trading days after the event, inclusive).
+ECMT_EVENT_WINDOWS <- list(
+  LFD = list("Shock (days 1-5)" = c(1, 5), "Short run (6-20)" = c(6, 20),
+             "Medium run (21-60)" = c(21, 60), "Long run (61+)" = c(61, Inf)),
+  HFD = list("Shock (days 1-5)" = c(1, 5), "Aftermath (6+)" = c(6, Inf))
+)
+
+ecmt_event_split <- function(frame, freq = c("LFD", "HFD")) {
+  freq <- match.arg(freq)
   n <- nrow(frame)
-  mode <- tolower(Sys.getenv("ECMT3150_SPLIT", "ratio"))
-  if (mode == "event" && "Period" %in% names(frame) && any(frame$Period == "Event")) {
-    # A row is in the test set when its TARGET falls in the Event period.
-    event_start <- min(frame$Date[frame$Period == "Event"])
-    is_test <- frame$Target_Date >= event_start
-    if (sum(!is_test) >= 10 && sum(is_test) >= 3) return(is_test)
-    message("  Event split leaves too few train/test rows; using the ratio split instead.")
+  is_event <- frame$Target_Date >= ECMT_EVENT_DATE
+  if (!any(is_event) || all(is_event)) {
+    stop(sprintf("Event date %s is outside the sample (%s to %s).", format(ECMT_EVENT_DATE),
+                 format(min(frame$Target_Date)), format(max(frame$Target_Date))), call. = FALSE)
   }
-  split_idx <- floor(ECMT_TRAIN_FRACTION * n)
-  seq_len(n) > split_idx
+  pre_rows <- which(!is_event)
+  window <- if (freq == "LFD") ECMT_PRE_WINDOW_LFD else ECMT_PRE_WINDOW_HFD
+  window <- max(0L, min(window, length(pre_rows) - ECMT_MIN_TRAIN[[freq]]))
+  split <- rep("Train", n)
+  split[is_event] <- "Event"
+  if (window > 0) split[utils::tail(pre_rows, window)] <- "PreEvent"
+  split
 }
 
-# Expanding-window refit schedule. Returns a list of blocks; each block is the
-# set of frame rows forecast with ONE set of parameters, and est_n is the last
-# observation (Row_Index) the parameters may use: the forecast origin of the
-# block's first row. Training rows form block 0 (parameters from the first
-# test origin, as for the XGBoost features).
-ecmt_refit_blocks <- function(frame, is_test, every) {
-  test_rows <- which(is_test)
-  every <- max(1L, as.integer(every))
-  starts <- test_rows[seq(1, length(test_rows), by = every)]
-  blocks <- list(list(rows = which(!is_test), est_n = frame$Row_Index[test_rows[1]]))
+# Trading-day count relative to the event: 1, 2, ... for Event rows,
+# -W, ..., -1 for PreEvent rows, NA for Train rows.
+ecmt_event_day <- function(split) {
+  out <- rep(NA_integer_, length(split))
+  ev <- which(split == "Event"); pre <- which(split == "PreEvent")
+  out[ev] <- seq_along(ev)
+  if (length(pre)) out[pre] <- -rev(seq_along(pre))
+  out
+}
+
+ecmt_schedule_blocks <- function(frame, split, every) {
+  starts <- integer(0)
+  for (seg in c("PreEvent", "Event")) {
+    rows <- which(split == seg)
+    if (length(rows) == 0) next
+    step <- if (is.finite(every)) max(1L, as.integer(every)) else length(rows) + 1L
+    starts <- c(starts, rows[seq(1, length(rows), by = step)])
+  }
+  forecast_rows <- which(split != "Train")
+  blocks <- list(list(rows = which(split == "Train"), est_n = frame$Row_Index[starts[1]]))
   for (i in seq_along(starts)) {
-    end <- if (i < length(starts)) starts[i + 1] - 1 else max(test_rows)
+    end <- if (i < length(starts)) starts[i + 1] - 1 else max(forecast_rows)
     blocks[[length(blocks) + 1]] <- list(rows = starts[i]:end, est_n = frame$Row_Index[starts[i]])
   }
   blocks
 }
 
-# Run an expanding-window forecast exercise.
+# Run a forecast schedule.
 #   fit_fun(est_n)        -> fitted parameters using observations 1..est_n (or NULL)
 #   forecast_fun(p, rows) -> forecasts for those frame rows
-# A failed refit reuses the previous parameters. Returns the forecast vector
-# with attributes n_fits / n_failed for reporting.
-ecmt_blocked_forecasts <- function(frame, blocks, fit_fun, forecast_fun) {
+# A failed refit reuses the previous parameters. `cache` (an environment) lets
+# the two schemes share estimations made at the same origin.
+ecmt_blocked_forecasts <- function(frame, blocks, fit_fun, forecast_fun, cache = new.env()) {
   out <- rep(NA_real_, nrow(frame))
-  cache <- list(); last <- NULL; n_fit <- 0L; n_fail <- 0L
+  last <- NULL; n_fit <- 0L; n_fail <- 0L
   for (b in blocks) {
     if (length(b$rows) == 0) next
     key <- as.character(b$est_n)
-    if (is.null(cache[[key]])) {
+    if (!exists(key, envir = cache, inherits = FALSE)) {
       p <- tryCatch(fit_fun(b$est_n), error = function(e) NULL)
-      if (is.null(p)) { n_fail <- n_fail + 1L; p <- last } else n_fit <- n_fit + 1L
-      cache[[key]] <- list(p)
+      assign(key, list(p), envir = cache)
     }
-    p <- cache[[key]][[1]]
+    p <- get(key, envir = cache)[[1]]
+    if (is.null(p)) { n_fail <- n_fail + 1L; p <- last } else n_fit <- n_fit + 1L
     if (is.null(p)) next
     last <- p
     out[b$rows] <- forecast_fun(p, b$rows)
@@ -434,6 +474,21 @@ ecmt_blocked_forecasts <- function(frame, blocks, fit_fun, forecast_fun) {
   attr(out, "n_failed") <- n_fail
   out
 }
+
+# Both schemes for one model. Returns list(Frozen = <vector>, Adaptive = <vector>).
+ecmt_event_forecasts <- function(frame, split, every, fit_fun, forecast_fun) {
+  cache <- new.env()
+  list(
+    Frozen   = ecmt_blocked_forecasts(frame, ecmt_schedule_blocks(frame, split, Inf),
+                                      fit_fun, forecast_fun, cache),
+    Adaptive = ecmt_blocked_forecasts(frame, ecmt_schedule_blocks(frame, split, every),
+                                      fit_fun, forecast_fun, cache)
+  )
+}
+
+# Index of the last observation before the event (estimation end for the
+# "no-conflict" counterfactual) and the number of post-event observations.
+ecmt_pre_event_n <- function(dates) sum(dates < ECMT_EVENT_DATE)
 
 # Forecast-accuracy metrics on the test rows. QLIKE uses variances
 # (actual^2 vs forecast^2) and skips non-positive values.
@@ -450,25 +505,49 @@ ecmt_metrics <- function(actual, forecast) {
   )
 }
 
-ecmt_metrics_row <- function(model, ticker, frame, is_test, forecast, target_col, target_label) {
-  m <- ecmt_metrics(frame[[target_col]][is_test], forecast[is_test])
+# Summary accuracy over the whole Event window (detailed per-window metrics
+# are computed by STAGE4/EVENT_STUDY.R from the forecast tables).
+ecmt_metrics_row <- function(model, ticker, frame, split, forecast, target_col, target_label, scheme) {
+  ev <- split == "Event"; tr <- split == "Train"
+  m <- ecmt_metrics(frame[[target_col]][ev], forecast[ev])
   cbind(
-    data.frame(Model = model, Ticker = ticker, Target = target_label,
-               Train_Start = format(min(frame$Target_Date[!is_test])),
-               Train_End   = format(max(frame$Target_Date[!is_test])),
-               Test_Start  = format(min(frame$Target_Date[is_test])),
-               Test_End    = format(max(frame$Target_Date[is_test])),
-               N_Train = sum(!is_test), stringsAsFactors = FALSE),
+    data.frame(Model = model, Ticker = ticker, Scheme = scheme, Target = target_label,
+               Train_Start = format(min(frame$Target_Date[tr])),
+               Train_End   = format(max(frame$Target_Date[tr])),
+               Test_Start  = format(min(frame$Target_Date[ev])),
+               Test_End    = format(max(frame$Target_Date[ev])),
+               N_Train = sum(tr), N_PreEvent = sum(split == "PreEvent"),
+               Refits = attr(forecast, "n_fits"), Refit_Failures = attr(forecast, "n_failed"),
+               stringsAsFactors = FALSE),
     m
   )
 }
 
-ecmt_forecast_rows <- function(model, ticker, frame, is_test, forecast, target_col) {
-  data.frame(Model = model, Ticker = ticker,
+ecmt_forecast_rows <- function(model, ticker, frame, split, forecast, target_col, scheme) {
+  data.frame(Model = model, Ticker = ticker, Scheme = scheme,
              Origin_Date = frame$Date, Target_Date = frame$Target_Date,
-             Split = ifelse(is_test, "Test", "Train"),
-             Actual = frame[[target_col]], Forecast = forecast,
+             Split = split, Event_Day = ecmt_event_day(split),
+             Actual = frame[[target_col]], Forecast = as.numeric(forecast),
+             Target_Abs_Return = frame$Target_Abs_Return,
              stringsAsFactors = FALSE)
+}
+
+# Metrics + forecast rows for both schemes, appended to the caller's lists.
+ecmt_collect_schemes <- function(fc, model, ticker, frame, split, target_col, target_label) {
+  list(
+    metrics = dplyr::bind_rows(lapply(names(fc), function(sc)
+      ecmt_metrics_row(model, ticker, frame, split, fc[[sc]], target_col, target_label, sc))),
+    forecasts = dplyr::bind_rows(lapply(names(fc), function(sc)
+      ecmt_forecast_rows(model, ticker, frame, split, fc[[sc]], target_col, sc)))
+  )
+}
+
+ecmt_print_oos <- function(res) {
+  for (i in seq_len(nrow(res$metrics))) {
+    m <- res$metrics[i, ]
+    cat(sprintf("  %-8s post-event (%s to %s, n=%d, %d estimation blocks): RMSE = %.4f | MAE = %.4f\n",
+                m$Scheme, m$Test_Start, m$Test_End, m$N_Test, m$Refits, m$RMSE, m$MAE))
+  }
 }
 
 # Write the per-model CSV tables consumed by the Python collectors.

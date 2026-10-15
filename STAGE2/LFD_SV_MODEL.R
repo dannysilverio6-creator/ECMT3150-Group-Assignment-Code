@@ -60,6 +60,7 @@ sv_results <- list()
 summary_rows <- list()
 metric_rows <- list()
 forecast_rows <- list()
+cf_rows <- list()
 options(device.ask.default = FALSE)
 
 # ---- 3. Master processing loop across tickers -----------------------------------
@@ -99,16 +100,15 @@ for (company in company_columns) {
   vol_fc_lower <- apply(h_fc, 2, quantile, probs = 0.05)
   vol_fc_upper <- apply(h_fc, 2, quantile, probs = 0.95)
 
-  # 3b. Out-of-sample evaluation on the common LFD frame (expanding window).
-  # SV parameters are re-estimated every ECMT_REFIT_EVERY_LFD test days on
-  # returns up to that origin; the particle filter then gives one-step-ahead
-  # predictive volatility. Refits use a shorter MCMC chain to keep run time low.
+  # 3b. Event-study forecasts (Frozen / Adaptive, see ECMT3150_COMMON.R).
+  # SV parameters are estimated on returns up to each origin; the particle
+  # filter then gives one-step-ahead predictive volatility. Re-estimations use
+  # a shorter MCMC chain to keep run time low.
   frame <- ecmt_lfd_frame(dates, ret_series, period)
-  is_test <- ecmt_test_rows(frame)
-  blocks <- ecmt_refit_blocks(frame, is_test, ECMT_REFIT_EVERY_LFD)
-  cat("Estimating expanding-window SV models for OOS forecasts...\n")
-  vol_next <- ecmt_blocked_forecasts(
-    frame, blocks,
+  split <- ecmt_event_split(frame, "LFD")
+  cat("Estimating event-study SV forecasts (frozen + adaptive)...\n")
+  vol_fc <- ecmt_event_forecasts(
+    frame, split, ECMT_REFIT_EVERY_LFD,
     fit_fun = function(est_n) {
       centre <- mean(ret_series[1:est_n])
       set.seed(ECMT_SEED)
@@ -122,20 +122,33 @@ for (company in company_columns) {
       pv[frame$Row_Index[rows] + 1]
     }
   )
-  if (any(is.finite(vol_next[is_test]))) {
-    oos_forecast <- sqrt(2 / pi) * vol_next
-    metric_rows[[company]] <- cbind(
-      ecmt_metrics_row("LFD_SV", company, frame, is_test,
-                       oos_forecast, "Target_Vol", "Next-day |return| (%)"),
-      Refits = attr(vol_next, "n_fits"), Refit_Failures = attr(vol_next, "n_failed"))
-    forecast_rows[[company]] <- ecmt_forecast_rows("LFD_SV", company, frame, is_test,
-                                                   oos_forecast, "Target_Vol")
-    cat(sprintf("  OOS (%s to %s, n=%d, %d refits): RMSE = %.4f | MAE = %.4f\n",
-                metric_rows[[company]]$Test_Start, metric_rows[[company]]$Test_End,
-                metric_rows[[company]]$N_Test, attr(vol_next, "n_fits"),
-                metric_rows[[company]]$RMSE, metric_rows[[company]]$MAE))
-  } else {
-    cat("  SV could not be estimated on the training sample - no OOS forecasts for", company, "\n")
+  oos <- lapply(vol_fc, function(s) sqrt(2 / pi) * s)
+  res <- ecmt_collect_schemes(oos, "LFD_SV", company, frame, split,
+                              "Target_Vol", "Next-day |return| (%)")
+  metric_rows[[company]] <- res$metrics
+  forecast_rows[[company]] <- res$forecasts
+  ecmt_print_oos(res)
+
+  # 3b'. "No-conflict" counterfactual: SV estimated on pre-event returns only,
+  # predicting the latent volatility path over the whole post-event period.
+  # The posterior predictive gives a 90% band for the counterfactual path.
+  n_pre <- ecmt_pre_event_n(dates); n_post <- length(ret_series) - n_pre
+  if (n_post > 0) {
+    centre <- mean(ret_series[1:n_pre])
+    set.seed(ECMT_SEED)
+    sv_pre <- try(svsample(ret_series[1:n_pre] - centre, quiet = TRUE), silent = TRUE)
+    if (!inherits(sv_pre, "try-error")) {
+      h_cf <- exp(ecmt_draws(predict(sv_pre, steps = n_post)$h) / 2)
+      cf_rows[[company]] <- data.frame(
+        Model = "LFD_SV", Ticker = company, Date = dates[(n_pre + 1):length(dates)],
+        Horizon = seq_len(n_post),
+        # E[sigma_t^2]^(1/2): comparable with the GARCH sigma path
+        CF_Sigma = sqrt(apply(h_cf^2, 2, mean)),
+        CF_Sigma_Lower90 = apply(h_cf, 2, quantile, 0.05),
+        CF_Sigma_Upper90 = apply(h_cf, 2, quantile, 0.95),
+        Realized_Return = ret_series[(n_pre + 1):length(ret_series)] - centre,
+        Distribution = "normal", stringsAsFactors = FALSE)
+    }
   }
 
   # 3c. Diagnostic dashboard
@@ -203,7 +216,8 @@ for (company in company_columns) {
     summary_df = summary_rows[[company]],
     oos_metrics = metric_rows[[company]],
     # One-step-ahead predictive volatility for every origin date (XGBoost feature)
-    feature_series = data.frame(Date = frame$Date, SV_Vol = vol_next),
+    feature_series = data.frame(Date = frame$Date, SV_Vol_Frozen = vol_fc$Frozen,
+                                SV_Vol_Adaptive = vol_fc$Adaptive),
     source_file = target_file
   )
 }
@@ -217,7 +231,8 @@ saveRDS(sv_results, file = dirs$rds)
 ecmt_write_tables(dirs, list(
   summary       = dplyr::bind_rows(summary_rows),
   oos_metrics   = dplyr::bind_rows(metric_rows),
-  oos_forecasts = dplyr::bind_rows(forecast_rows)
+  oos_forecasts = dplyr::bind_rows(forecast_rows),
+  counterfactual = dplyr::bind_rows(cf_rows)
 ))
 
 cat("\n======================================================\n")

@@ -98,65 +98,75 @@ for (current_ric in unique_rics) {
   }
   ml_data <- ecmt_hfd_frame(daily_data)
 
-  # Step 2: Realized GARCH one-step-ahead volatility feature from Stage 2
+  # Step 2: Realized GARCH one-step-ahead volatility feature from Stage 2,
+  # one version per scheme (Frozen features for the Frozen XGBoost, etc.)
   fs <- rg_rds[[current_ric]]$feature_series
-  if (!is.null(fs) && any(!is.na(fs$RG_Sigma))) {
-    ml_data <- dplyr::left_join(ml_data, fs[, c("Date", "RG_Sigma")], by = "Date")
+  cols <- paste0("RG_Sigma_", ECMT_SCHEMES)
+  if (!is.null(fs) && all(cols %in% names(fs)) && any(!is.na(fs[[cols[2]]]))) {
+    ml_data <- dplyr::left_join(ml_data, fs[, c("Date", cols)], by = "Date")
     cat("  -> Realized GARCH one-step-ahead sigma loaded from HFD_REALGARCH.rds\n")
   } else {
     cat("  -> Realized GARCH feature unavailable. Using 5-day rolling SD of daily returns as fallback.\n")
-    ml_data$RG_Sigma <- zoo::rollapplyr(daily_data$Daily_Return, 5, sd, fill = NA)[ml_data$Row_Index]
+    fb <- zoo::rollapplyr(daily_data$Daily_Return, 5, sd, fill = NA)[ml_data$Row_Index]
+    for (c in cols) ml_data[[c]] <- fb
   }
-  ml_data <- ml_data[stats::complete.cases(ml_data[, c(features, "RV_Target")]), , drop = FALSE]
+  ml_data <- ml_data[stats::complete.cases(ml_data[, c(setdiff(features, "RG_Sigma"), cols, "RV_Target")]),
+                     , drop = FALSE]
 
   if (nrow(ml_data) < 15) {
     cat("Insufficient rows after feature construction for", current_ric, "- skipping...\n")
     next
   }
 
-  # Step 3: chronological split (same dates as HAR-RV / Realized GARCH)
-  is_test <- ecmt_test_rows(ml_data)
-  train_data <- ml_data[!is_test, , drop = FALSE]
-  test_data <- ml_data[is_test, , drop = FALSE]
+  # Step 3: event-study split (identical dates to the econometric models)
+  split <- tryCatch(ecmt_event_split(ml_data, "HFD"), error = function(e) NULL)
+  if (is.null(split) || sum(split == "Train") < 10) {
+    cat("Too few pre-event rows to train XGBoost for", current_ric, "- skipping...\n")
+    next
+  }
+  is_test <- split == "Event"
 
-  # Step 4: train XGBoost on an expanding window, refitting every
-  # ECMT_REFIT_EVERY_HFD test observations (same schedule as the econometric models).
-  # Early stopping uses the end of each training sample, never the test set.
-  blocks <- ecmt_refit_blocks(ml_data, is_test, ECMT_REFIT_EVERY_HFD)
-  first_model <- NULL; last_fit <- NULL
-  cat("  -> Training XGBoost models (expanding window)...\n")
-  all_forecast <- ecmt_blocked_forecasts(
-    ml_data, blocks,
-    fit_fun = function(est_n) {
-      tr <- ml_data[ml_data$Row_Index + 1 <= est_n, , drop = FALSE]
-      fit <- ecmt_xgb_fit(as.matrix(tr[, features]), tr$RV_Target, xgb_params,
-                          nrounds = 150, early_stopping_rounds = 15)
-      if (is.null(first_model)) first_model <<- fit
-      last_fit <<- fit
-      fit
-    },
-    forecast_fun = function(fit, rows) {
-      # Volatility cannot be negative; squared-error trees can undershoot slightly.
-      pmax(predict(fit$model, xgboost::xgb.DMatrix(as.matrix(ml_data[rows, features]))), 0)
-    }
-  )
+  # Step 4: train XGBoost under both schemes (Frozen: trained before the event
+  # only; Adaptive: re-trained every ECMT_REFIT_EVERY_HFD days on an expanding
+  # window). Early stopping uses the end of each training sample, never the
+  # test period. Volatility cannot be negative, so forecasts are floored at 0.
+  fc <- list(); last_fit <- NULL
+  for (sc in ECMT_SCHEMES) {
+    d <- ml_data
+    d$RG_Sigma <- d[[paste0("RG_Sigma_", sc)]]
+    every <- if (sc == "Frozen") Inf else ECMT_REFIT_EVERY_HFD
+    cat("  -> Training XGBoost (", sc, ")...\n", sep = "")
+    fc[[sc]] <- ecmt_blocked_forecasts(
+      d, ecmt_schedule_blocks(d, split, every),
+      fit_fun = function(est_n) {
+        tr <- d[d$Row_Index + 1 <= est_n, , drop = FALSE]
+        fit <- ecmt_xgb_fit(as.matrix(tr[, features]), tr$RV_Target, xgb_params,
+                            nrounds = 150, early_stopping_rounds = 15)
+        if (sc == "Adaptive") last_fit <<- fit
+        fit
+      },
+      forecast_fun = function(fit, rows) {
+        pmax(predict(fit$model, xgboost::xgb.DMatrix(as.matrix(d[rows, features]))), 0)
+      }
+    )
+  }
   xgb <- last_fit
   xgb_model <- xgb$model
+  all_forecast <- fc$Adaptive
+  train_data <- ml_data[!is_test, , drop = FALSE]
+  test_data <- ml_data[is_test, , drop = FALSE]
   test_data$XGB_Forecast <- all_forecast[is_test]
 
-  metrics <- cbind(
-    ecmt_metrics_row("HFD_XGBoost", current_ric, ml_data, is_test, all_forecast,
-                     "RV_Target", "Next-day realised volatility (%)"),
-    Best_Iteration = xgb$best_iteration,
-    Refits = attr(all_forecast, "n_fits")
-  )
+  res <- ecmt_collect_schemes(fc, "HFD_XGBoost", current_ric, ml_data, split,
+                              "RV_Target", "Next-day realised volatility (%)")
+  res$metrics$Best_Iteration <- xgb$best_iteration
+  metrics <- res$metrics
   metric_rows[[current_ric]] <- metrics
-  forecast_rows[[current_ric]] <- ecmt_forecast_rows("HFD_XGBoost", current_ric, ml_data, is_test,
-                                                     all_forecast, "RV_Target")
-  rmse <- metrics$RMSE
-  mae <- metrics$MAE
-  cat(sprintf("  -> Out-of-Sample Performance (%s to %s, n=%d): RMSE = %.4f | MAE = %.4f\n",
-              metrics$Test_Start, metrics$Test_End, metrics$N_Test, rmse, mae))
+  forecast_rows[[current_ric]] <- res$forecasts
+  ecmt_print_oos(res)
+  rmse <- metrics$RMSE[metrics$Scheme == "Adaptive"]
+  mae <- metrics$MAE[metrics$Scheme == "Adaptive"]
+  metrics <- metrics[metrics$Scheme == "Adaptive", ]
 
   # Step 5: dashboards
   importance_matrix <- ecmt_xgb_importance(xgb_model, features)
@@ -207,7 +217,7 @@ for (current_ric in unique_rics) {
   diagnostic_dashboard <- (p1 + p2) / (p3 + p4) +
     plot_annotation(
       title = paste("HFD XGBoost Hybrid (HAR-RV + Realized GARCH) | Ticker:", current_ric),
-      subtitle = sprintf("Out-of-Sample Testing | RMSE: %.4f | MAE: %.4f | n = %d days",
+      subtitle = sprintf("Post-event, adaptive scheme | RMSE: %.4f | MAE: %.4f | n = %d days",
                          rmse, mae, metrics$N_Test),
       theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
                     plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"))

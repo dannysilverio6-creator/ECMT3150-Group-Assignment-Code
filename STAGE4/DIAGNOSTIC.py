@@ -1,15 +1,19 @@
 # ==============================================================================
 # Script Name: DIAGNOSTIC.py
-# Pipeline Stage: Stage 4 - Final Diagnostics & Conclusive Model Benchmark
-# Description: Merges the Stage 2 and Stage 3 benchmark workbooks into
-#              CONCLUSIVE_MODEL_DIAGNOSTICS.xlsx, ranks the models for each
-#              ticker by OUT-OF-SAMPLE RMSE on a common test window (separately
-#              for HFD and LFD), runs quality checks on the forecasts, and
-#              sorts every diagnostic PNG into PHOTOS/<MODEL>/.
-#
-# Why RMSE and not AIC: AIC/BIC are in-sample criteria and are not comparable
-# across models fitted to different data (e.g. GARCH on returns vs HAR-RV
-# regressions on realised volatility). They are reported for reference only.
+# Pipeline Stage: Stage 4 - Event-study model evaluation & conclusive workbook
+# Description: Turns the event-study outputs into a model verdict:
+#   1. Window leaderboards: best model per instrument in the calm pre-event
+#      window, the shock week and the whole post-event period, for both the
+#      Frozen (estimated before the event, never updated) and Adaptive
+#      (re-estimated through the event) schemes, with Diebold-Mariano tests
+#      against the best model and against the naive benchmark.
+#   2. Robustness ranking: average rank of each model across instruments in
+#      every window, its accuracy relative to naive, how much its error grows
+#      from calm to shock, and whether its 95% volatility band still covers
+#      realised moves (Kupiec test) -> recommended model per frequency.
+#   3. Frozen vs Adaptive: how much re-estimation through the event helps.
+#   4. Quality checks, and plots sorted into PHOTOS/<MODEL>/.
+# Output: Pipeline_Outputs/Conclusive_Results/CONCLUSIVE_MODEL_DIAGNOSTICS.xlsx
 # ==============================================================================
 
 import math
@@ -26,7 +30,12 @@ import ecmt3150_paths as P  # noqa: E402
 
 BENCHMARKS = ["LFD_BENCHMARK.xlsx", "HFD_BENCHMARK.xlsx", "ML_BENCHMARK.xlsx"]
 ALL_MODELS = {**P.STAGE2_MODELS, **P.STAGE3_MODELS}
+FORECAST_KEYS = [*ALL_MODELS, "NAIVE_BENCHMARKS"]
 CONCLUSIVE_NAME = "CONCLUSIVE_MODEL_DIAGNOSTICS.xlsx"
+KEY_WINDOWS = ["Pre-event (calm)", "Shock (days 1-5)", "All post-event"]
+SHOCK = "Shock (days 1-5)"
+PRE = "Pre-event (calm)"
+POST = "All post-event"
 
 
 def sheet_title(name, used):
@@ -58,88 +67,40 @@ def sort_photos():
     return counts
 
 
-def load_metrics():
-    frames = []
-    for key in ALL_MODELS:
-        df = P.read_model_table(key, "oos_metrics")
-        if df is not None and not df.empty:
-            df = df.copy()
-            df["Frequency"] = key.split("_")[0]
-            frames.append(df)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-
 def load_forecasts():
-    frames = [P.read_model_table(key, "oos_forecasts") for key in ALL_MODELS]
+    frames = [P.read_model_table(key, "oos_forecasts") for key in FORECAST_KEYS]
     frames = [f for f in frames if f is not None and not f.empty]
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-
-# ------------------------------------------------------------------------------
-# Naive benchmarks and Diebold-Mariano tests
-# ------------------------------------------------------------------------------
-NAIVE_LABEL = {"HFD": "HFD_Naive_RW", "LFD": "LFD_Naive_22D"}
-
-
-def naive_forecasts(forecasts):
-    """Simple baselines built from the realised target on the SAME rows.
-
-    HFD: random walk - tomorrow's RV forecast is today's RV.
-    LFD: 22-day moving average of |return| up to today.
-    Rows are only used where the previous targets are consecutive, so no
-    future information enters.
-    """
-    if forecasts.empty:
+    if not frames:
         return pd.DataFrame()
-    out, done = [], set()
-    for model in forecasts["Model"].unique():
-        freq = model.split("_")[0]
-        if freq not in NAIVE_LABEL or freq in done:
-            continue
-        done.add(freq)
-        base = forecasts[forecasts["Model"] == model].copy()
-        for ticker, grp in base.groupby("Ticker"):
-            g = grp.sort_values("Origin_Date").copy()
-            prev_target = g["Target_Date"].shift(1)
-            consecutive = prev_target == g["Origin_Date"]
-            if freq == "HFD":
-                g["Forecast"] = g["Actual"].shift(1).where(consecutive)
-            else:
-                g["Forecast"] = g["Actual"].shift(1).rolling(22).mean().where(consecutive)
-            g["Model"] = NAIVE_LABEL[freq]
-            out.append(g)
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+    fc = pd.concat(frames, ignore_index=True)
+    fc["Frequency"] = fc["Model"].str.split("_").str[0]
+    return fc
 
 
-def metrics_from_forecasts(fc, template):
-    """OOS metrics for naive forecasts, in the same layout as the R tables."""
-    rows = []
-    for (model, ticker), g in fc[fc["Split"] == "Test"].groupby(["Model", "Ticker"]):
-        g = g.dropna(subset=["Actual", "Forecast"])
-        if g.empty:
-            continue
-        a, f = g["Actual"].to_numpy(float), g["Forecast"].to_numpy(float)
-        ok = (a > 0) & (f > 0)
-        ratio = a[ok] ** 2 / f[ok] ** 2
-        ref = template[(template["Ticker"] == ticker) &
-                       (template["Frequency"] == model.split("_")[0])]
-        rows.append({
-            "Model": model, "Ticker": ticker,
-            "Target": ref["Target"].iloc[0] if len(ref) else "",
-            "Train_Start": ref["Train_Start"].iloc[0] if len(ref) else "",
-            "Train_End": ref["Train_End"].iloc[0] if len(ref) else "",
-            "Test_Start": g["Target_Date"].min(), "Test_End": g["Target_Date"].max(),
-            "N_Train": ref["N_Train"].iloc[0] if len(ref) else np.nan,
-            "N_Test": len(g), "RMSE": float(np.sqrt(np.mean((a - f) ** 2))),
-            "MAE": float(np.mean(np.abs(a - f))),
-            "QLIKE": float(np.mean(ratio - np.log(ratio) - 1)) if ok.any() else np.nan,
-            "Frequency": model.split("_")[0],
-        })
-    return pd.DataFrame(rows)
+# Same windows as ECMT_EVENT_WINDOWS in ECMT3150_COMMON.R (trading days after the event).
+EVENT_WINDOWS = {
+    "LFD": {"Shock (days 1-5)": (1, 5), "Short run (6-20)": (6, 20),
+            "Medium run (21-60)": (21, 60), "Long run (61+)": (61, math.inf)},
+    "HFD": {"Shock (days 1-5)": (1, 5), "Aftermath (6+)": (6, math.inf)},
+}
 
 
+def window_labels(fc, wm=None):
+    """One row per forecast and window it belongs to (rows appear in their own
+    window and in 'All post-event')."""
+    out = [fc[fc["Split"] == "PreEvent"].assign(Window=PRE),
+           fc[fc["Split"] == "Event"].assign(Window=POST)]
+    for freq, wins in EVENT_WINDOWS.items():
+        ev = fc[(fc["Frequency"] == freq) & (fc["Split"] == "Event")]
+        for name, (lo, hi) in wins.items():
+            out.append(ev[(ev["Event_Day"] >= lo) & (ev["Event_Day"] <= hi)].assign(Window=name))
+    return pd.concat(out, ignore_index=True)
+
+
+# ------------------------------------------------------------------------------
+# Diebold-Mariano test
+# ------------------------------------------------------------------------------
 def _t_sf(t, df):
-    """Two-sided p-value for a t statistic (scipy if available, else normal)."""
     try:
         from scipy import stats
         return float(2 * stats.t.sf(abs(t), df))
@@ -148,77 +109,105 @@ def _t_sf(t, df):
 
 
 def diebold_mariano(e1, e2):
-    """DM test (squared-error loss, h=1) with the Harvey-Leybourne-Newbold
-    small-sample correction. Negative statistic => model 1 is more accurate."""
+    """Squared-error DM test, h=1, Harvey-Leybourne-Newbold correction.
+    Negative statistic => model 1 more accurate."""
     d = np.asarray(e1, float) ** 2 - np.asarray(e2, float) ** 2
     d = d[np.isfinite(d)]
     n = len(d)
     if n < 3 or np.var(d, ddof=1) == 0:
         return np.nan, np.nan
-    dm = d.mean() / math.sqrt(np.var(d, ddof=1) / n)
-    dm *= math.sqrt((n - 1) / n)
+    dm = d.mean() / math.sqrt(np.var(d, ddof=1) / n) * math.sqrt((n - 1) / n)
     return float(dm), _t_sf(dm, n - 1)
 
 
-def add_dm_tests(ranked, forecasts):
-    """DM test of every model against the best model and against the naive baseline."""
-    if ranked.empty or forecasts.empty:
-        return ranked
-    test = forecasts[forecasts["Split"] == "Test"]
-    errors = {(m, t): g.set_index("Target_Date")["Actual"] - g.set_index("Target_Date")["Forecast"]
-              for (m, t), g in test.groupby(["Model", "Ticker"])}
-    out = ranked.copy()
-    for col in ("DM_stat_vs_Best", "DM_p_vs_Best", "DM_stat_vs_Naive", "DM_p_vs_Naive"):
-        out[col] = np.nan
-    for idx, row in out.iterrows():
-        grp = out[(out["Frequency"] == row["Frequency"]) & (out["Ticker"] == row["Ticker"])]
-        best = grp.sort_values("RMSE").iloc[0]["Model"]
-        naive = NAIVE_LABEL.get(row["Frequency"])
-        for ref, prefix in ((best, "vs_Best"), (naive, "vs_Naive")):
-            if ref == row["Model"] or (ref, row["Ticker"]) not in errors:
-                continue
-            e1 = errors.get((row["Model"], row["Ticker"]))
-            e2 = errors[(ref, row["Ticker"])]
-            if e1 is None:
-                continue
-            joined = pd.concat([e1, e2], axis=1, join="inner").dropna()
-            stat, p = diebold_mariano(joined.iloc[:, 0], joined.iloc[:, 1])
-            out.loc[idx, f"DM_stat_{prefix}"] = stat
-            out.loc[idx, f"DM_p_{prefix}"] = p
-    return out
-
-
-def leaderboard(metrics):
-    if metrics.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    ranked = metrics.sort_values(["Frequency", "Ticker", "RMSE"]).copy()
-    ranked["Rank_RMSE"] = ranked.groupby(["Frequency", "Ticker"])["RMSE"].rank(method="min").astype(int)
-
-    rows = []
-    for (freq, ticker), grp in ranked.groupby(["Frequency", "Ticker"], sort=True):
-        grp = grp.sort_values("RMSE")
-        best = grp.iloc[0]
-        runner = grp.iloc[1] if len(grp) > 1 else None
-        windows = grp[["Test_Start", "Test_End", "N_Test"]].drop_duplicates()
+def leaderboards(wm, fc_win):
+    """Best model per Frequency x Ticker x Scheme x Window, with DM tests."""
+    rows, ranked = [], []
+    errors = {}
+    if not fc_win.empty:
+        for k, g in fc_win.groupby(["Frequency", "Ticker", "Scheme", "Window", "Model"]):
+            errors[k] = (g["Actual"] - g["Forecast"]).set_axis(g["Target_Date"].values)
+    for (freq, ticker, scheme, win), g in wm[wm["Window"].isin(KEY_WINDOWS)].groupby(
+            ["Frequency", "Ticker", "Scheme", "Window"]):
+        g = g.sort_values("RMSE").copy()
+        best = g.iloc[0]["Model"]
+        naive = next((m for m in g["Model"] if "Naive" in m), None)
+        for ref, col in ((best, "vs_Best"), (naive, "vs_Naive")):
+            stats_, ps = [], []
+            for m in g["Model"]:
+                e1 = errors.get((freq, ticker, scheme, win, m))
+                e2 = errors.get((freq, ticker, scheme, win, ref))
+                if ref is None or m == ref or e1 is None or e2 is None:
+                    stats_.append(np.nan); ps.append(np.nan); continue
+                j = pd.concat([e1, e2], axis=1, join="inner").dropna()
+                s, p = diebold_mariano(j.iloc[:, 0], j.iloc[:, 1])
+                stats_.append(s); ps.append(p)
+            g[f"DM_stat_{col}"] = stats_
+            g[f"DM_p_{col}"] = ps
+        ranked.append(g)
+        runner = g.iloc[1] if len(g) > 1 else None
+        b = g.iloc[0]
         rows.append({
-            "Frequency": freq,
-            "Ticker": ticker,
-            "Best_Model_Selected": best["Model"],
-            "Best_RMSE": best["RMSE"],
-            "Best_MAE": best["MAE"],
+            "Frequency": freq, "Ticker": ticker, "Scheme": scheme, "Window": win,
+            "Best_Model": b["Model"], "Best_RMSE": b["RMSE"], "Best_RMSE_vs_Naive": b["RMSE_vs_Naive"],
             "Runner_Up": None if runner is None else runner["Model"],
             "Runner_Up_RMSE": None if runner is None else runner["RMSE"],
-            "RMSE_Improvement_vs_Runner_Up_%": (
-                None if runner is None or runner["RMSE"] == 0
-                else round(100 * (runner["RMSE"] - best["RMSE"]) / runner["RMSE"], 2)),
-            "Models_Compared": len(grp),
-            "Test_Start": best["Test_Start"],
-            "Test_End": best["Test_End"],
-            "N_Test": int(best["N_Test"]),
-            "Common_Test_Window": "YES" if len(windows) == 1 else "NO - check windows",
-            "Target": best["Target"],
+            "DM_p_Best_vs_Runner_Up": None if runner is None else runner["DM_p_vs_Best"],
+            "DM_p_Best_vs_Naive": b["DM_p_vs_Naive"],
+            "Significant_vs_Runner_Up_5%": "YES" if runner is not None and runner["DM_p_vs_Best"] < 0.05 else "NO",
+            "N": int(b["N"]), "Start": b["Start"], "End": b["End"],
         })
-    return pd.DataFrame(rows), ranked
+    order = {w: i for i, w in enumerate(KEY_WINDOWS)}
+    best_df = pd.DataFrame(rows)
+    if not best_df.empty:
+        best_df = best_df.sort_values(["Frequency", "Scheme", "Window", "Ticker"],
+                                      key=lambda c: c.map(order) if c.name == "Window" else c)
+    ranked_df = pd.concat(ranked, ignore_index=True) if ranked else pd.DataFrame()
+    return best_df, ranked_df
+
+
+def robustness(wm):
+    """Average performance of each model across instruments, window by window."""
+    if wm.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    g = wm.groupby(["Frequency", "Model", "Scheme", "Window"])
+    summ = g.agg(Instruments=("Ticker", "nunique"), Avg_Rank=("Rank_in_Window", "mean"),
+                 Avg_RMSE_vs_Naive=("RMSE_vs_Naive", "mean"),
+                 Avg_RMSE_vs_PreEvent=("RMSE_vs_PreEvent", "mean"),
+                 Avg_Bias=("Bias", "mean"),
+                 Avg_Band95_Exceed=("Band95_Exceed_Rate", "mean"),
+                 Band_Rejections_5pct=("Band95_Kupiec_p", lambda p: int((p < 0.05).sum()))).reset_index()
+
+    # Recommendation: lowest average rank over the post-event windows
+    # (excluding the "All" aggregate), adaptive scheme; ties -> RMSE vs naive.
+    post = summ[(~summ["Window"].isin([PRE, POST])) & (~summ["Model"].str.contains("Naive"))]
+    rec = []
+    for (freq, scheme), gg in post.groupby(["Frequency", "Scheme"]):
+        score = gg.groupby("Model").agg(Avg_Post_Rank=("Avg_Rank", "mean"),
+                                        Avg_RMSE_vs_Naive=("Avg_RMSE_vs_Naive", "mean")).reset_index()
+        shock = gg[gg["Window"] == SHOCK].set_index("Model")
+        calm = summ[(summ["Frequency"] == freq) & (summ["Scheme"] == scheme) & (summ["Window"] == PRE)].set_index("Model")
+        allp = summ[(summ["Frequency"] == freq) & (summ["Scheme"] == scheme) & (summ["Window"] == POST)].set_index("Model")
+        score["Calm_Rank"] = score["Model"].map(calm["Avg_Rank"])
+        score["Shock_Rank"] = score["Model"].map(shock["Avg_Rank"])
+        score["Shock_Error_Growth_x"] = score["Model"].map(shock["Avg_RMSE_vs_PreEvent"])
+        score["Post_Band95_Exceed"] = score["Model"].map(allp["Avg_Band95_Exceed"])
+        score["Post_Band_Rejections"] = score["Model"].map(allp["Band_Rejections_5pct"])
+        score = score.sort_values(["Avg_Post_Rank", "Avg_RMSE_vs_Naive"])
+        score.insert(0, "Scheme", scheme)
+        score.insert(0, "Frequency", freq)
+        score["Recommended"] = ["YES"] + ["" for _ in range(len(score) - 1)]
+        rec.append(score)
+    return summ, (pd.concat(rec, ignore_index=True) if rec else pd.DataFrame())
+
+
+def frozen_vs_adaptive(wm):
+    """% change in RMSE from re-estimating through the event (negative = adaptive better)."""
+    p = wm[wm["Window"].isin([SHOCK, POST]) & ~wm["Model"].str.contains("Naive")]
+    piv = p.pivot_table(index=["Frequency", "Ticker", "Model", "Window"], columns="Scheme", values="RMSE").reset_index()
+    if {"Frozen", "Adaptive"} <= set(piv.columns):
+        piv["Adaptive_vs_Frozen_RMSE_%"] = 100 * (piv["Adaptive"] / piv["Frozen"] - 1)
+    return piv
 
 
 def information_criteria():
@@ -232,11 +221,11 @@ def information_criteria():
                          "AIC": r["AIC"], "BIC": r.get("BIC", np.nan)})
     out = pd.DataFrame(rows)
     if not out.empty:
-        out["Note"] = "In-sample criterion; compare only within the same model and data."
+        out["Note"] = "Full-sample, in-sample criterion; compare only within the same model and data."
     return out
 
 
-def run_checks(metrics, forecasts, benchmark_paths):
+def run_checks(fc, wm, benchmark_paths):
     checks = []
 
     def add(check, status, detail):
@@ -246,116 +235,99 @@ def run_checks(metrics, forecasts, benchmark_paths):
         path = P.RESULTS_DIR / name
         add(f"Benchmark workbook {name}", "PASS" if path in benchmark_paths else "FAIL",
             str(path) if path in benchmark_paths else "missing")
-
     for key, label in ALL_MODELS.items():
-        present = not metrics.empty and (metrics["Model"] == label).any()
-        add(f"OOS metrics for {label}", "PASS" if present else "FAIL",
-            "found" if present else f"no rows in {P.TABLE_DIR / key / 'oos_metrics.csv'}")
+        ok = not fc.empty and (fc["Model"] == label).any()
+        add(f"Forecasts for {label}", "PASS" if ok else "FAIL",
+            "found" if ok else f"no rows in {P.TABLE_DIR / key / 'oos_forecasts.csv'}")
+    add("Event-study window metrics", "PASS" if not wm.empty else "FAIL",
+        "found" if not wm.empty else "run STAGE4/EVENT_STUDY.R")
+    if fc.empty:
+        return pd.DataFrame(checks)
 
-    if not forecasts.empty:
-        test = forecasts[forecasts["Split"] == "Test"]
-        nonfinite = int((~np.isfinite(test["Forecast"].astype(float))).sum())
-        add("Test forecasts are finite", "PASS" if nonfinite == 0 else "WARNING",
-            f"{nonfinite} non-finite test forecasts")
-        neg = test[test["Forecast"].astype(float) < 0]
-        detail = "0 negative test forecasts"
-        if len(neg):
-            by_model = neg.groupby(["Model", "Ticker"]).size()
-            detail = f"{len(neg)} negative test forecasts: " + ", ".join(
-                f"{m} {t} ({n})" for (m, t), n in by_model.items())
-        add("Volatility forecasts are non-negative", "PASS" if neg.empty else "WARNING", detail)
-        order_ok = (pd.to_datetime(test["Target_Date"]) > pd.to_datetime(test["Origin_Date"])).all()
-        add("Forecast origin precedes target date", "PASS" if order_ok else "FAIL",
-            "all test rows" if order_ok else "some targets are not after their origin")
-
-    if not metrics.empty:
-        chrono = (pd.to_datetime(metrics["Train_End"]) < pd.to_datetime(metrics["Test_Start"])).all()
-        add("Train sample ends before test sample", "PASS" if chrono else "FAIL",
-            "chronological split verified" if chrono else "overlap detected")
-        for (freq, ticker), grp in metrics.groupby(["Frequency", "Ticker"]):
-            same = len(grp[["Test_Start", "Test_End", "N_Test"]].drop_duplicates()) == 1
-            add(f"Common test window {freq} {ticker}", "PASS" if same else "WARNING",
-                f"{grp['Test_Start'].iloc[0]} to {grp['Test_End'].iloc[0]} ({int(grp['N_Test'].iloc[0])} obs)"
-                if same else "models were scored on different dates")
-            small = int(grp["N_Test"].min())
-            if small < 20:
-                add(f"Test sample size {freq} {ticker}", "WARNING",
-                    f"only {small} out-of-sample observations - rankings are not statistically reliable")
+    oos = fc[fc["Split"].isin(["PreEvent", "Event"])]
+    nonfinite = int((~np.isfinite(oos["Forecast"].astype(float))).sum())
+    add("Out-of-sample forecasts are finite", "PASS" if nonfinite == 0 else "WARNING",
+        f"{nonfinite} non-finite forecasts (naive needs 22 prior days)" if nonfinite else "all finite")
+    neg = oos[oos["Forecast"].astype(float) < 0]
+    add("Volatility forecasts are non-negative", "PASS" if neg.empty else "WARNING",
+        f"{len(neg)} negative forecasts" if len(neg) else "none negative")
+    order_ok = (pd.to_datetime(oos["Target_Date"]) > pd.to_datetime(oos["Origin_Date"])).all()
+    add("Forecast origin precedes target date", "PASS" if order_ok else "FAIL",
+        "all rows" if order_ok else "some targets are not after their origin")
+    for (freq, ticker), g in fc.groupby(["Frequency", "Ticker"]):
+        train_end = pd.to_datetime(g.loc[g["Split"] == "Train", "Target_Date"]).max()
+        first_event = pd.to_datetime(g.loc[g["Split"] == "Event", "Target_Date"]).min()
+        add(f"Estimation sample precedes event {freq} {ticker}",
+            "PASS" if train_end < first_event else "FAIL",
+            f"train ends {train_end:%Y-%m-%d}, event window starts {first_event:%Y-%m-%d}")
+        ev = g[(g["Split"] == "Event") & (g["Scheme"] == "Adaptive") & ~g["Model"].str.contains("Naive")]
+        windows = ev.groupby("Model")["Target_Date"].agg(["min", "max", "count"]).drop_duplicates()
+        add(f"Common post-event window {freq} {ticker}", "PASS" if len(windows) == 1 else "WARNING",
+            "all models scored on the same days" if len(windows) == 1 else "models scored on different days")
+        n_post = int(ev.groupby("Model").size().min()) if len(ev) else 0
+        if n_post < 20:
+            add(f"Post-event sample size {freq} {ticker}", "WARNING",
+                f"only {n_post} post-event days - DM tests have little power")
     return pd.DataFrame(checks)
 
 
 def main():
     print("======================================================")
-    print(" FINAL DIAGNOSTICS & CONCLUSIVE BENCHMARK COMPILER ")
+    print(" EVENT-STUDY MODEL EVALUATION & CONCLUSIVE WORKBOOK ")
     print(f" Date: {datetime.now():%Y-%m-%d %H:%M}")
     print("======================================================")
     print(P.describe() + "\n")
     P.ensure_dirs(P.CONCLUSIVE_DIR)
 
-    print("Task 1: Organizing PNG diagnostic plots into PHOTOS/<MODEL>/ ...")
-    counts = sort_photos()
-    for key, n in counts.items():
+    print("Task 1: Organizing PNG plots into PHOTOS/<MODEL>/ ...")
+    for key, n in sort_photos().items():
         print(f" -> {key:<14} {n} plots")
-    print(f" -> PHOTOS folder: {P.PHOTOS_DIR}\n")
 
-    print("Task 2: Merging benchmark workbooks...")
     benchmark_paths = [P.RESULTS_DIR / n for n in BENCHMARKS if (P.RESULTS_DIR / n).is_file()]
     if not benchmark_paths:
         print(f" [!] No benchmark workbooks found in {P.RESULTS_DIR}. Run Stages 2 and 3 first.")
         return 1
+    wm = P.read_model_table("EVENT_STUDY", "window_metrics")
+    if wm is None or wm.empty:
+        print(" [!] EVENT_STUDY/window_metrics.csv not found. Run STAGE4/EVENT_STUDY.R first.")
+        return 1
 
-    metrics = load_metrics()
-    forecasts = load_forecasts()
-    naive = naive_forecasts(forecasts)
-    if not naive.empty:
-        forecasts = pd.concat([forecasts, naive], ignore_index=True)
-        metrics = pd.concat([metrics, metrics_from_forecasts(naive, metrics)], ignore_index=True)
-        print(" -> Added naive baselines: " + ", ".join(sorted(naive["Model"].unique())))
-    best, ranked = leaderboard(metrics)
-    ranked = add_dm_tests(ranked, forecasts)
-    if not best.empty:
-        runner_p = []
-        for _, b in best.iterrows():
-            r = ranked[(ranked["Frequency"] == b["Frequency"]) & (ranked["Ticker"] == b["Ticker"]) &
-                       (ranked["Model"] == b["Runner_Up"])]
-            runner_p.append(r["DM_p_vs_Best"].iloc[0] if len(r) else np.nan)
-        best["DM_p_Best_vs_Runner_Up"] = runner_p
-        best_naive = []
-        for _, b in best.iterrows():
-            r = ranked[(ranked["Frequency"] == b["Frequency"]) & (ranked["Ticker"] == b["Ticker"]) &
-                       (ranked["Model"] == b["Best_Model_Selected"])]
-            best_naive.append(r["DM_p_vs_Naive"].iloc[0] if len(r) else np.nan)
-        best["DM_p_Best_vs_Naive"] = best_naive
-        best["Significant_at_5%"] = np.where(best["DM_p_Best_vs_Runner_Up"] < 0.05, "YES",
-                                             "NO - not distinguishable from runner-up")
-    checks = run_checks(metrics, forecasts, benchmark_paths)
-    ic = information_criteria()
+    print("\nTask 2: Leaderboards, Diebold-Mariano tests and robustness ranking...")
+    fc = load_forecasts()
+    fc_win = window_labels(fc, wm)
+    best, ranked = leaderboards(wm, fc_win)
+    summ, rec = robustness(wm)
+    fva = frozen_vs_adaptive(wm)
+    checks = run_checks(fc, wm, benchmark_paths)
 
-    conclusive_path = P.CONCLUSIVE_DIR / CONCLUSIVE_NAME
+    path = P.CONCLUSIVE_DIR / CONCLUSIVE_NAME
     used = set()
-    with pd.ExcelWriter(conclusive_path, engine="openpyxl") as writer:
-        if not best.empty:
-            best.to_excel(writer, sheet_name=sheet_title("Conclusive_Leaderboard", used), index=False)
-            ranked.to_excel(writer, sheet_name=sheet_title("OOS_Ranking_All_Models", used), index=False)
-            print(" -> 'Conclusive_Leaderboard' ranks models per ticker by out-of-sample RMSE.")
-        for table, title in (("lfd_event_study", "Event_Study_LFD"),
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        rec.to_excel(writer, sheet_name=sheet_title("Model_Recommendation", used), index=False)
+        best.to_excel(writer, sheet_name=sheet_title("Window_Leaderboard", used), index=False)
+        ranked.to_excel(writer, sheet_name=sheet_title("Window_Ranking_DM_Tests", used), index=False)
+        summ.to_excel(writer, sheet_name=sheet_title("Robustness_By_Window", used), index=False)
+        fva.to_excel(writer, sheet_name=sheet_title("Frozen_vs_Adaptive", used), index=False)
+        wm.to_excel(writer, sheet_name=sheet_title("Window_Metrics_All", used), index=False)
+        for table, title in (("abnormal_volatility", "Abnormal_Volatility"),
+                             ("lfd_event_study", "Event_Study_LFD"),
                              ("hfd_event_study", "Event_Study_HFD"),
                              ("garch_event_dummy", "Event_Study_EGARCH_Dummy")):
             df = P.read_model_table("EVENT_STUDY", table)
             if df is not None and not df.empty:
                 df.to_excel(writer, sheet_name=sheet_title(title, used), index=False)
         checks.to_excel(writer, sheet_name=sheet_title("Run_Checks", used), index=False)
+        ic = information_criteria()
         if not ic.empty:
             ic.to_excel(writer, sheet_name=sheet_title("Information_Criteria", used), index=False)
-        for path in benchmark_paths:
-            prefix = path.stem.split("_")[0]  # LFD / HFD / ML
-            with pd.ExcelFile(path) as xls:
+        for bpath in benchmark_paths:
+            prefix = bpath.stem.split("_")[0]
+            with pd.ExcelFile(bpath) as xls:
                 for sheet in xls.sheet_names:
-                    if sheet == "OOS_Forecasts":
-                        continue  # kept in the benchmark workbooks; avoids a very large file
+                    if sheet in ("OOS_Forecasts", "OOS_Metrics"):
+                        continue
                     name = sheet if sheet.startswith(prefix) else f"{prefix}_{sheet}"
                     xls.parse(sheet).to_excel(writer, sheet_name=sheet_title(name, used), index=False)
-            print(f" -> Merged {path.name}")
 
     n_fail = int((checks["Status"] == "FAIL").sum())
     n_warn = int((checks["Status"] == "WARNING").sum())
@@ -365,16 +337,12 @@ def main():
             print(f"  {row['Status']:<8} {row['Check']}: {row['Detail']}")
     print(f"  {len(checks) - n_fail - n_warn} PASS, {n_warn} WARNING, {n_fail} FAIL")
 
-    if not best.empty:
-        print("\nBest model per ticker (out-of-sample RMSE):")
-        print(best[["Frequency", "Ticker", "Best_Model_Selected", "Best_RMSE", "N_Test",
-                    "DM_p_Best_vs_Runner_Up"]].to_string(index=False))
-
-    print("\n======================================================")
-    print(" DIAGNOSTICS COMPILATION COMPLETE! ")
-    print(f" Conclusive Master Workbook : {conclusive_path}")
-    print(f" Segmented Photos Directory : {P.PHOTOS_DIR}")
-    print("======================================================\n")
+    if not rec.empty:
+        print("\nRecommended model per frequency (lowest average post-event rank):")
+        print(rec[rec["Recommended"] == "YES"][["Frequency", "Scheme", "Model", "Avg_Post_Rank",
+                                                "Avg_RMSE_vs_Naive", "Shock_Error_Growth_x"]].to_string(index=False))
+    print(f"\n Conclusive workbook : {path}")
+    print(f" Photos              : {P.PHOTOS_DIR}")
     return 1 if n_fail else 0
 
 

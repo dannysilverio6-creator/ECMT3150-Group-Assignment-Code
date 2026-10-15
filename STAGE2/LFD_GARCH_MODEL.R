@@ -62,6 +62,7 @@ garch_results <- list()
 summary_rows <- list()
 metric_rows <- list()
 forecast_rows <- list()
+cf_rows <- list()
 options(device.ask.default = FALSE)
 
 # ---- 3. Fit GARCH(1,1) for every ticker ----------------------------------------
@@ -88,15 +89,14 @@ for (company in company_columns) {
   garch_fc <- ugarchforecast(garch_fit, n.ahead = 30)
   pred_vol <- as.numeric(sigma(garch_fc))
 
-  # 3b. Out-of-sample evaluation on the common LFD frame (expanding window).
-  # Parameters are re-estimated every ECMT_REFIT_EVERY_LFD test days using
-  # returns up to that forecast origin only; the filter then gives sigma_{t+1}
-  # from information up to day t.
+  # 3b. Event-study forecasts (see ECMT3150_COMMON.R): parameters estimated
+  # with data up to each forecast origin only; the filter gives sigma_{t+1}.
+  # Frozen = estimated before the event and never updated; Adaptive = also
+  # re-estimated every ECMT_REFIT_EVERY_LFD days through the event.
   frame <- ecmt_lfd_frame(dates, ret_pct, period)
-  is_test <- ecmt_test_rows(frame)
-  blocks <- ecmt_refit_blocks(frame, is_test, ECMT_REFIT_EVERY_LFD)
-  sigma_next <- ecmt_blocked_forecasts(
-    frame, blocks,
+  split <- ecmt_event_split(frame, "LFD")
+  sigma_fc <- ecmt_event_forecasts(
+    frame, split, ECMT_REFIT_EVERY_LFD,
     fit_fun = function(est_n) {
       f <- ugarchfit(spec = garch_spec, data = ret_pct[1:est_n], solver = "hybrid")
       if (convergence(f) != 0) NULL else coef(f)
@@ -109,21 +109,27 @@ for (company in company_columns) {
       s_all[frame$Row_Index[rows] + 1]
     }
   )
-  if (any(is.finite(sigma_next[is_test]))) {
-    # Under normality E|r| = sqrt(2/pi) * sigma, matching the |return| target.
-    oos_forecast <- sqrt(2 / pi) * sigma_next
-    metric_rows[[company]] <- cbind(
-      ecmt_metrics_row("LFD_GARCH(1,1)", company, frame, is_test,
-                       oos_forecast, "Target_Vol", "Next-day |return| (%)"),
-      Refits = attr(sigma_next, "n_fits"), Refit_Failures = attr(sigma_next, "n_failed"))
-    forecast_rows[[company]] <- ecmt_forecast_rows("LFD_GARCH(1,1)", company, frame, is_test,
-                                                   oos_forecast, "Target_Vol")
-    cat(sprintf("  OOS (%s to %s, n=%d, %d refits): RMSE = %.4f | MAE = %.4f\n",
-                metric_rows[[company]]$Test_Start, metric_rows[[company]]$Test_End,
-                metric_rows[[company]]$N_Test, attr(sigma_next, "n_fits"),
-                metric_rows[[company]]$RMSE, metric_rows[[company]]$MAE))
-  } else {
-    cat("  GARCH could not be estimated on the training sample - no OOS forecasts for", company, "\n")
+  # Under normality E|r| = sqrt(2/pi) * sigma, matching the |return| target.
+  oos <- lapply(sigma_fc, function(s) sqrt(2 / pi) * s)
+  res <- ecmt_collect_schemes(oos, "LFD_GARCH(1,1)", company, frame, split,
+                              "Target_Vol", "Next-day |return| (%)")
+  metric_rows[[company]] <- res$metrics
+  forecast_rows[[company]] <- res$forecasts
+  ecmt_print_oos(res)
+
+  # 3b'. "No-conflict" counterfactual: the model estimated on PRE-EVENT data
+  # only, forecasting the whole post-event period from the event origin
+  # without seeing any post-event return. Realised vs counterfactual volatility
+  # is the model's measure of abnormal (event-driven) volatility.
+  n_pre <- ecmt_pre_event_n(dates); n_post <- length(ret_pct) - n_pre
+  cf_fit <- try(ugarchfit(spec = garch_spec, data = ret_pct[1:n_pre], solver = "hybrid"), silent = TRUE)
+  if (n_post > 0 && !inherits(cf_fit, "try-error") && convergence(cf_fit) == 0) {
+    cf_sigma <- as.numeric(sigma(ugarchforecast(cf_fit, n.ahead = n_post)))
+    cf_rows[[company]] <- data.frame(
+      Model = "LFD_GARCH(1,1)", Ticker = company, Date = dates[(n_pre + 1):length(dates)],
+      Horizon = seq_len(n_post), CF_Sigma = cf_sigma, CF_Sigma_Lower90 = NA_real_,
+      CF_Sigma_Upper90 = NA_real_, Realized_Return = ret_pct[(n_pre + 1):length(ret_pct)],
+      Distribution = "normal", stringsAsFactors = FALSE)
   }
 
   # 3c. Diagnostic dashboard
@@ -190,7 +196,8 @@ for (company in company_columns) {
     summary_df = summary_rows[[company]],
     oos_metrics = metric_rows[[company]],
     # One-step-ahead sigma for every origin date (used as an XGBoost feature)
-    feature_series = data.frame(Date = frame$Date, GARCH_Sigma = sigma_next),
+    feature_series = data.frame(Date = frame$Date, GARCH_Sigma_Frozen = sigma_fc$Frozen,
+                                GARCH_Sigma_Adaptive = sigma_fc$Adaptive),
     source_file = target_file
   )
 }
@@ -204,7 +211,8 @@ saveRDS(garch_results, file = dirs$rds)
 ecmt_write_tables(dirs, list(
   summary       = dplyr::bind_rows(summary_rows),
   oos_metrics   = dplyr::bind_rows(metric_rows),
-  oos_forecasts = dplyr::bind_rows(forecast_rows)
+  oos_forecasts = dplyr::bind_rows(forecast_rows),
+  counterfactual = dplyr::bind_rows(cf_rows)
 ))
 
 cat("\n======================================================\n")
